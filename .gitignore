@@ -16,6 +16,9 @@ dist-ssr
 .dev.vars
 .wrangler
 
+# Local DB seeds (contain PIN hashes — brute-forceable for short PINs)
+seed*.sql
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

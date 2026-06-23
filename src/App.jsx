@@ -5,39 +5,34 @@ import SparkleTrail from './components/SparkleTrail';
 
 export default function App() {
   const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
 
-  // Auto-login if we have a token stored
+  // Restore session from the httpOnly cookie via the worker (no tokens in JS).
   useEffect(() => {
-    const savedToken = localStorage.getItem('townsquare_token');
-    const savedTokensRaw = localStorage.getItem('townsquare_tokens');
-    const savedSlug = localStorage.getItem('townsquare_slug');
-    const savedName = localStorage.getItem('townsquare_name');
-
-    if (savedToken && savedSlug) {
-      setSession({
-        slug: savedSlug,
-        token: savedToken,
-        tokens: savedTokensRaw ? JSON.parse(savedTokensRaw) : { herald: savedToken },
-        name: savedName || savedSlug.toUpperCase()
-      });
-    }
+    fetch('/api/session', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d && d.slug) setSession(d); })
+      .catch(() => {})
+      .finally(() => setChecking(false));
   }, []);
 
-  const handleLogin = (authData) => {
-    localStorage.setItem('townsquare_token', authData.token);
-    if (authData.tokens) localStorage.setItem('townsquare_tokens', JSON.stringify(authData.tokens));
-    localStorage.setItem('townsquare_slug', authData.slug);
-    localStorage.setItem('townsquare_name', authData.name);
-    setSession(authData);
-  };
+  const handleLogin = (data) => setSession(data);
 
-  const handleLogout = () => {
-    localStorage.removeItem('townsquare_token');
-    localStorage.removeItem('townsquare_tokens');
-    localStorage.removeItem('townsquare_slug');
-    localStorage.removeItem('townsquare_name');
+  const handleLogout = async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* ignore */ }
     setSession(null);
   };
+
+  if (checking) {
+    return (
+      <>
+        <SparkleTrail />
+        <div className="login-wrapper">
+          <div className="login-subtitle" style={{ opacity: 0.6 }}>Loading TownSquare…</div>
+        </div>
+      </>
+    );
+  }
 
   if (!session) {
     return (
@@ -51,10 +46,7 @@ export default function App() {
   return (
     <>
       <SparkleTrail />
-      <Dashboard 
-        business={{ slug: session.slug, name: session.name, token: session.token, tokens: session.tokens }} 
-        onLogout={handleLogout} 
-      />
+      <Dashboard business={session} onLogout={handleLogout} />
     </>
   );
 }

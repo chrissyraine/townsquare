@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 export default function Login({ onLogin }) {
   const [slug, setSlug] = useState('titusville-mill');
-  const [pin, setPin] = useState('admin');
+  const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -12,57 +12,24 @@ export default function Login({ onLogin }) {
     setError(null);
 
     try {
-      const HERALD_API = 'https://theherald.pages.dev';
-      const DRAWBRIDGE_API = 'https://getdrawbridge.app';
-      const BELLTOWER_API = 'https://getbelltower.app';
-      
-      const [heraldRes, drawbridgeRes, belltowerRes] = await Promise.all([
-        fetch(`${HERALD_API}/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, pin })
-        }),
-        // Drawbridge uses /keep/login for restaurant owners
-        fetch(`${DRAWBRIDGE_API}/api/auth/keep/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, pin })
-        }).catch(() => ({ ok: false })),
-        // Belltower uses /belfry/login for venue owners
-        fetch(`${BELLTOWER_API}/api/auth/belfry/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug, pin })
-        }).catch(() => ({ ok: false }))
-      ]);
+      // Single TownSquare login. The hub authenticates against its own registry
+      // and brokers the products server-side — no per-product fan-out, no tokens
+      // in the browser (an httpOnly session cookie is set by the worker).
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ slug: slug.trim(), pin }),
+      });
+      const data = await res.json().catch(() => ({}));
 
-      const heraldData = await heraldRes.json();
-      let drawbridgeData = {};
-      if (drawbridgeRes && drawbridgeRes.ok) {
-        drawbridgeData = await drawbridgeRes.json();
-      }
-      let belltowerData = {};
-      if (belltowerRes && belltowerRes.ok) {
-        belltowerData = await belltowerRes.json();
-      }
-
-      if (!heraldRes.ok) {
-        setError(heraldData.error || "Invalid PIN. Please try again.");
+      if (!res.ok) {
+        setError(data.error === 'invalid_login' ? 'Invalid slug or PIN. Please try again.' : (data.error || 'Login failed.'));
       } else {
-        onLogin({ 
-          slug: heraldData.slug, 
-          token: heraldData.token, // Main herald token (legacy)
-          tokens: {
-            herald: heraldData.token,
-            drawbridge: drawbridgeData.token || null,
-            belltower: belltowerData.token || null
-          },
-          businessId: heraldData.businessId,
-          name: slug.replace('-', ' ').toUpperCase() 
-        });
+        onLogin({ slug: data.slug, name: data.name, town: data.town, modules: data.modules || {} });
       }
-    } catch (err) {
-      setError("Network error connecting to authentication services.");
+    } catch {
+      setError('Network error connecting to TownSquare.');
     } finally {
       setLoading(false);
     }
@@ -75,27 +42,27 @@ export default function Login({ onLogin }) {
           <h1 className="login-logo text-gradient">TownSquare</h1>
           <p className="login-subtitle">Unified Owner Dashboard</p>
         </div>
-        
+
         <form onSubmit={handleSubmit}>
           <div className="input-group">
             <label className="input-label" htmlFor="slug">Business Slug</label>
-            <input 
+            <input
               id="slug"
-              type="text" 
-              className="input-field" 
+              type="text"
+              className="input-field"
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
               placeholder="e.g. titusville-mill"
               required
             />
           </div>
-          
+
           <div className="input-group">
             <label className="input-label" htmlFor="pin">Access PIN</label>
-            <input 
+            <input
               id="pin"
-              type="password" 
-              className="input-field" 
+              type="password"
+              className="input-field"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
               placeholder="••••••"
@@ -109,9 +76,9 @@ export default function Login({ onLogin }) {
             </div>
           )}
 
-          <button 
-            type="submit" 
-            className="btn btn-primary" 
+          <button
+            type="submit"
+            className="btn btn-primary"
             style={{ width: '100%', marginTop: '8px' }}
             disabled={loading}
           >

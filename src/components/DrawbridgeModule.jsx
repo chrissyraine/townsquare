@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 
-const DRAWBRIDGE_API = 'https://getdrawbridge.app';
+// Routed through the TownSquare proxy; the worker mints a Keep-scoped token
+// server-side. No tokens in the browser.
+const DRAWBRIDGE_API = '/api/m/drawbridge';
 
 export default function DrawbridgeModule({ business }) {
   const [loading, setLoading] = useState(true);
@@ -8,17 +10,13 @@ export default function DrawbridgeModule({ business }) {
   const [specials, setSpecials] = useState([]);
   const [isOpen, setIsOpen] = useState(true);
   const [closedMessage, setClosedMessage] = useState('');
-  
+
   const [newSpecialName, setNewSpecialName] = useState('');
   const [newSpecialPrice, setNewSpecialPrice] = useState('');
 
-  const token = business.tokens?.drawbridge;
-
   const fetchState = async () => {
     try {
-      const res = await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/state`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/state`, { credentials: 'same-origin' });
       if (res.ok) {
         const data = await res.json();
         setItems(data.items || []);
@@ -34,24 +32,18 @@ export default function DrawbridgeModule({ business }) {
   };
 
   useEffect(() => {
-    if (!token) {
-      setLoading(false);
-      return;
-    }
     fetchState();
-  }, [business.slug, token]);
+  }, [business.slug]);
 
   const handleToggleItem = async (item) => {
     const newStatus = !item.is_available;
     // Optimistic update
     setItems(items.map(i => i.id === item.id ? { ...i, is_available: newStatus ? 1 : 0 } : i));
-    
+
     await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/items/${item.id}`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify({ is_available: newStatus })
     });
   };
@@ -59,19 +51,17 @@ export default function DrawbridgeModule({ business }) {
   const handleUpdatePrice = async (item, newPrice) => {
     const numericPrice = parseFloat(newPrice);
     if (isNaN(numericPrice)) return;
-    
+
     setItems(items.map(i => i.id === item.id ? { ...i, price: numericPrice } : i));
-    
+
     await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/items/${item.id}`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ 
-        name: item.name, 
-        description: item.description || '', 
-        price: numericPrice 
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        name: item.name,
+        description: item.description || '',
+        price: numericPrice
       })
     });
   };
@@ -79,14 +69,12 @@ export default function DrawbridgeModule({ business }) {
   const handleAddSpecial = async (e) => {
     e.preventDefault();
     if (!newSpecialName || !newSpecialPrice) return;
-    
+
     try {
       const res = await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/specials`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ name: newSpecialName, price: parseFloat(newSpecialPrice) })
       });
       if (res.ok) {
@@ -104,7 +92,7 @@ export default function DrawbridgeModule({ business }) {
     setSpecials(specials.filter(s => s.id !== id));
     await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/specials/${id}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
+      credentials: 'same-origin'
     });
   };
 
@@ -112,24 +100,11 @@ export default function DrawbridgeModule({ business }) {
     setIsOpen(active);
     await fetch(`${DRAWBRIDGE_API}/api/keep/${business.slug}/restaurant`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify({ is_open: active, closed_message: closedMessage })
     });
   };
-
-  if (!token) {
-    return (
-      <div className="animate-fade-in glass-panel" style={{ padding: '40px', textAlign: 'center', maxWidth: '600px' }}>
-        <h3>Authentication Required</h3>
-        <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
-          Please log out and log back in to authenticate with Drawbridge.
-        </p>
-      </div>
-    );
-  }
 
   if (loading) return <div className="animate-fade-in">Loading Drawbridge...</div>;
 
@@ -152,7 +127,7 @@ export default function DrawbridgeModule({ business }) {
               Pause all incoming online orders immediately.
             </p>
           </div>
-          <button 
+          <button
             className={`btn ${isOpen ? 'btn-outline' : 'btn-primary'}`}
             style={{ borderColor: isOpen ? 'var(--success)' : 'var(--danger)', color: isOpen ? 'var(--success)' : '#fff', backgroundColor: isOpen ? 'transparent' : 'var(--danger)' }}
             onClick={() => handleToggleOrdering(!isOpen)}
@@ -198,29 +173,29 @@ export default function DrawbridgeModule({ business }) {
             {items.filter(i => !i.is_special).map(item => (
               <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                 <span style={{ opacity: item.is_available ? 1 : 0.5, textDecoration: item.is_available ? 'none' : 'line-through', flex: 1 }}>{item.name}</span>
-                
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', padding: '4px 8px' }}>
                     <span style={{ color: 'var(--text-muted)', marginRight: '4px' }}>$</span>
-                    <input 
+                    <input
                       type="number"
                       step="0.01"
                       defaultValue={Number(item.price).toFixed(2)}
                       onBlur={(e) => handleUpdatePrice(item, e.target.value)}
-                      style={{ 
-                        background: 'transparent', 
-                        border: 'none', 
-                        color: 'var(--text-light)', 
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-light)',
                         width: '60px',
                         outline: 'none',
                         fontFamily: 'inherit'
                       }}
                     />
                   </div>
-                  
+
                   <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       checked={item.is_available === 1}
                       onChange={() => handleToggleItem(item)}
                       style={{ accentColor: 'var(--accent-primary)', transform: 'scale(1.2)' }}

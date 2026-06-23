@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 
-const HERALD_API = 'https://theherald.pages.dev';
+// Routed through the TownSquare proxy; the worker mints a Business-scoped token
+// server-side. No tokens in the browser.
+const HERALD_API = '/api/m/herald';
 
 export default function HeraldModule({ business }) {
   const [loading, setLoading] = useState(true);
@@ -69,8 +71,7 @@ export default function HeraldModule({ business }) {
 
     try {
       const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${business.token}`
+        'Content-Type': 'application/json'
       };
 
       // 1. Save Announcement
@@ -109,8 +110,7 @@ export default function HeraldModule({ business }) {
     // We mock that flow here and post the result to our API.
     try {
       const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${business.token}`
+        'Content-Type': 'application/json'
       };
 
       await fetch(`${HERALD_API}/api/businesses/${business.slug}/meta-auth`, {
