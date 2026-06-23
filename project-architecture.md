@@ -115,12 +115,18 @@ brokered owner backend (a spec-inbox API on the house pattern) is a **later phas
 decoupled from Phase 1. _Open question for Chrissy: confirm tile/deep-link for v1._
 
 ## Cross-app impact (guideline #1)
-- **Phase-1 brokering requires NO edits to Herald/Drawbridge/Belltower/Hearth.** It
-  only reads their token claim shapes and reuses their secrets.
+- **Phase-1 brokering requires NO *code* edits to Herald/Drawbridge/Belltower/Hearth.**
+  The broker only needs each product's `{scope, slug}` token shape (audited) — no
+  internal IDs, no handler changes.
+- **BUT: Cloudflare Pages secrets are write-only.** Each product's existing
+  production `SESSION_SECRET` can't be read back out, so "custody the existing
+  secret" is impossible. The implemented path is the **literal shared secret**: set
+  ONE freshly-generated secret as `SESSION_SECRET` on all four products **and**
+  TownSquare's `HERALD/DRAWBRIDGE/BELLTOWER/HEARTH_SECRET`. This is a one-time
+  `wrangler pages secret put` on each of the four live apps; the only effect is that
+  currently-logged-in product owners must re-login once (old tokens stop verifying).
+  Code unchanged; it's a config/secret rotation only.
 - Each product's CORS already answers `/api/*` preflight `*`, so proxying works today.
-- If we later adopt one literal shared secret, that becomes a **coordinated 4-app
-  secret rotation** that invalidates all live owner sessions once — deliberately
-  deferred.
 
 ---
 
