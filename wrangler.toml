@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "townsquare"
-database_id = "REPLACE_AFTER_d1_create"
+database_id = "de3d1aaf-a3c2-4e96-85eb-0e40452dd595"
 
 # Secrets are NOT stored here. Set per environment with:
 #   wrangler pages secret put SESSION_SECRET    --project-name townsquare
