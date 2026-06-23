@@ -1,0 +1,206 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=Montserrat:wght@300;400;500;600&display=swap');
+
+:root {
+  /* Forever Still Brand Palette */
+  --bg-base: #121212;         /* Charcoal/Black */
+  --bg-surface: #161616;      /* Soft dark */
+  --bg-elevated: #1c1a18;     /* Warm dark */
+  
+  --text-main: #F4EDE0;       /* Cream */
+  --text-soft: #E8DFD0;       /* Soft Cream */
+  --text-muted: #b9ad9f;      /* Muted beige */
+  
+  --accent-primary: #C8A96A;  /* Signature Gold */
+  --accent-secondary: #d4a5a5;/* Dusty Rose */
+  --accent-deep: #7a6228;     /* Deep Gold */
+  --accent-dim: #a8894a;      /* Dim Gold */
+  
+  --border-light: rgba(200, 169, 106, 0.30); /* Gold at 30% */
+  
+  --danger: #d4a5a5; /* Using rose for subtle warnings */
+  --success: #C8A96A;
+  
+  --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 20px rgba(200, 169, 106, 0.15); /* Gold glow */
+  
+  --radius-md: 8px;  /* Sharper, more elegant corners */
+  --radius-lg: 12px;
+  
+  --transition-fast: 0.2s ease-in-out;
+  --transition-smooth: 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Montserrat', sans-serif;
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  line-height: 1.75;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 300; /* Thinner, more elegant headers */
+  letter-spacing: 0.02em;
+  color: var(--text-main);
+}
+
+/* Typography Classes */
+.text-gradient {
+  color: var(--accent-primary);
+  /* Optional: subtle shimmer effect */
+  background: linear-gradient(135deg, var(--text-main) 0%, var(--accent-primary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: inline-block;
+}
+
+/* Layout */
+.app-container {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+}
+
+/* Glass Panel / Cards */
+.glass-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+/* Inputs */
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.input-label {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gold-ink);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+
+.input-field {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--text-main);
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-family: 'Montserrat', sans-serif;
+  transition: var(--transition-fast);
+  outline: none;
+}
+
+.input-field:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-surface);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 36px;
+  border-radius: 0px; /* FS Studio uses sharp buttons */
+  font-weight: 500;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  border: 1px solid transparent;
+  outline: none;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--accent-primary);
+  color: var(--bg-base); /* Dark text on gold */
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover {
+  background: var(--text-main);
+  border-color: var(--text-main);
+  box-shadow: var(--shadow-glow);
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--accent-primary);
+  border: 1px solid var(--border-light);
+}
+
+.btn-outline:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-primary);
+  color: var(--text-main);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.6s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+/* Login specific layout */
+.login-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  width: 100%;
+  padding: 24px;
+  background-image: radial-gradient(circle at 50% 0%, var(--bg-surface) 0%, var(--bg-base) 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 48px 40px;
+  background: var(--bg-surface);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.login-logo {
+  font-size: 2.5rem;
+  margin-bottom: 8px;
+  font-weight: 400;
+}
+
+.login-subtitle {
+  color: var(--accent-secondary);
+  font-size: 1rem;
+  font-style: italic;
+}
