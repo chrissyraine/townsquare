@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import HeraldModule from './HeraldModule';
 import DrawbridgeModule from './DrawbridgeModule';
+import BelltowerModule from './BelltowerModule';
 
 export default function Dashboard({ business, onLogout }) {
   const [activeTab, setActiveTab] = useState('herald');
@@ -13,15 +14,7 @@ export default function Dashboard({ business, onLogout }) {
       case 'drawbridge':
         return <DrawbridgeModule business={business} />;
       case 'belltower':
-        return (
-          <div className="animate-fade-in">
-            <h2>The Belfry: Bookings</h2>
-            <p style={{ color: 'var(--text-muted)' }}>Manage appointments and event capacity.</p>
-            <div className="glass-panel" style={{ padding: '24px', marginTop: '16px' }}>
-              <p>Belltower Module Placeholder</p>
-            </div>
-          </div>
-        );
+        return <BelltowerModule business={business} />;
       case 'hearth':
         return (
           <div className="animate-fade-in">
@@ -65,10 +58,22 @@ export default function Dashboard({ business, onLogout }) {
           </button>
           <button 
             className={`btn ${activeTab === 'belltower' ? 'btn-primary' : 'btn-outline'}`} 
-            style={{ justifyContent: 'flex-start' }}
+            style={{ justifyContent: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px' }}
             onClick={() => setActiveTab('belltower')}
           >
-            📅 Belltower
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ filter: activeTab === 'belltower' ? 'none' : 'grayscale(1) opacity(0.7)' }}>
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+              <path d="M8 14h.01"></path>
+              <path d="M12 14h.01"></path>
+              <path d="M16 14h.01"></path>
+              <path d="M8 18h.01"></path>
+              <path d="M12 18h.01"></path>
+              <path d="M16 18h.01"></path>
+            </svg>
+            Belltower
           </button>
           <button 
             className={`btn ${activeTab === 'hearth' ? 'btn-primary' : 'btn-outline'}`} 

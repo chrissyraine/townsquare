@@ -14,8 +14,9 @@ export default function Login({ onLogin }) {
     try {
       const HERALD_API = 'https://theherald.pages.dev';
       const DRAWBRIDGE_API = 'https://getdrawbridge.app';
+      const BELLTOWER_API = 'https://getbelltower.app';
       
-      const [heraldRes, drawbridgeRes] = await Promise.all([
+      const [heraldRes, drawbridgeRes, belltowerRes] = await Promise.all([
         fetch(`${HERALD_API}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -26,13 +27,23 @@ export default function Login({ onLogin }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ slug, pin })
-        }).catch(() => ({ ok: false })) // Catch network errors safely
+        }).catch(() => ({ ok: false })),
+        // Belltower uses /belfry/login for venue owners
+        fetch(`${BELLTOWER_API}/api/auth/belfry/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug, pin })
+        }).catch(() => ({ ok: false }))
       ]);
 
       const heraldData = await heraldRes.json();
       let drawbridgeData = {};
       if (drawbridgeRes && drawbridgeRes.ok) {
         drawbridgeData = await drawbridgeRes.json();
+      }
+      let belltowerData = {};
+      if (belltowerRes && belltowerRes.ok) {
+        belltowerData = await belltowerRes.json();
       }
 
       if (!heraldRes.ok) {
@@ -43,7 +54,8 @@ export default function Login({ onLogin }) {
           token: heraldData.token, // Main herald token (legacy)
           tokens: {
             herald: heraldData.token,
-            drawbridge: drawbridgeData.token || null
+            drawbridge: drawbridgeData.token || null,
+            belltower: belltowerData.token || null
           },
           businessId: heraldData.businessId,
           name: slug.replace('-', ' ').toUpperCase() 
