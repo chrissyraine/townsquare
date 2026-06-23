@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import Login from './components/Login';
+import Landing from './components/Landing';
 import Dashboard from './components/Dashboard';
 import SparkleTrail from './components/SparkleTrail';
 
@@ -38,7 +38,7 @@ export default function App() {
     return (
       <>
         <SparkleTrail />
-        <Login onLogin={handleLogin} />
+        <Landing onLogin={handleLogin} />
       </>
     );
   }
