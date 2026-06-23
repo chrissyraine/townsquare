@@ -39,42 +39,44 @@ export default function Dashboard({ business, onLogout }) {
 
   return (
     <div className="app-container">
-      <aside className="glass-panel" style={{ width: '280px', borderRadius: 0, borderLeft: 'none', borderTop: 'none', borderBottom: 'none', padding: '24px', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ marginBottom: '40px' }}>
-          <h1 className="text-gradient" style={{ fontSize: '1.5rem' }}>TownSquare</h1>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{business?.name}</p>
+      <aside className="ts-side">
+        <div className="ts-brand">
+          <svg className="ts-brand__mark" viewBox="0 0 100 100" aria-hidden="true">
+            <rect width="100" height="100" rx="22" fill="#1c1a18" stroke="rgba(200,169,106,.4)" />
+            <path transform="translate(14,14) scale(0.72)" fill="var(--accent-primary)" d="M50 14 L84 40 H16 Z M20 40h60v6H20z M26 48h6v26h-6z M44 48h6v26h-6z M62 48h6v26h-6z M74 48h6v26h-6z M16 76h68v7H16z" />
+          </svg>
+          <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
+            <span className="ts-brand__name">TownSquare</span>
+            <span className="ts-brand__sub">by Forever Still Studio</span>
+          </span>
         </div>
 
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '8px', flexGrow: 1 }}>
+        <div className="ts-biz">Signed in as <b>{business?.name}</b></div>
+
+        <nav className="ts-nav">
           {MODULES.map((m) => {
             const enrolled = !!modules[m.key];
             const active = activeTab === m.key;
+            const dim = !enrolled && !m.external;
             return (
               <button
                 key={m.key}
-                className={`btn ${active ? 'btn-primary' : 'btn-outline'}`}
-                style={{ justifyContent: 'flex-start', display: 'flex', alignItems: 'center', gap: '10px', opacity: enrolled || m.external ? 1 : 0.55 }}
+                className={`ts-navitem${active ? ' active' : ''}${dim ? ' dim' : ''}`}
                 onClick={() => setActiveTab(m.key)}
               >
-                <span style={{ filter: active ? 'none' : 'grayscale(0.6)' }}>{m.icon}</span>
-                <span style={{ flexGrow: 1, textAlign: 'left' }}>{m.label}</span>
-                {!enrolled && !m.external && (
-                  <span style={{ fontSize: '0.65rem', letterSpacing: '0.05em', color: 'var(--accent-primary)', border: '1px solid var(--accent-primary)', borderRadius: 4, padding: '1px 5px' }}>ADD</span>
-                )}
-                {m.external && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>↗</span>}
+                <span className="ts-navitem__ico">{m.icon}</span>
+                <span className="ts-navitem__label">{m.label}</span>
+                {dim && <span className="ts-navitem__add">ADD</span>}
+                {m.external && <span className="ts-navitem__ext">↗</span>}
               </button>
             );
           })}
         </nav>
 
-        <div>
-          <button className="btn btn-outline" style={{ width: '100%', borderColor: 'var(--border-light)', color: 'var(--text-muted)' }} onClick={onLogout}>
-            Logout
-          </button>
-        </div>
+        <button className="ts-logout" onClick={onLogout}>Sign out</button>
       </aside>
 
-      <main style={{ flexGrow: 1, padding: '40px', overflowY: 'auto' }}>
+      <main className="ts-main">
         {renderContent()}
       </main>
     </div>

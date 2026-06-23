@@ -63,6 +63,17 @@ h1, h2, h3, h4, h5, h6 {
   display: inline-block;
 }
 
+/* Section eyebrow (gold, used across modules — was previously undefined) */
+.eyebrow {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  margin-bottom: 10px;
+}
+
 /* Layout */
 .app-container {
   display: flex;
@@ -72,10 +83,10 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Glass Panel / Cards */
 .glass-panel {
-  background: var(--bg-surface);
+  background: linear-gradient(180deg, var(--bg-elevated), var(--bg-surface));
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-md), 0 1px 0 rgba(200, 169, 106, 0.10) inset;
 }
 
 /* Inputs */
@@ -203,4 +214,63 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--accent-secondary);
   font-size: 1rem;
   font-style: italic;
+}
+
+/* ── Hub shell: sidebar + nav (post-sign-in) ── */
+.ts-side {
+  width: 268px;
+  flex: none;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-light);
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+}
+.ts-brand { display: flex; align-items: center; gap: 11px; padding: 4px 6px 20px; }
+.ts-brand__mark { width: 40px; height: 40px; flex: none; }
+.ts-brand__name { font-family: 'Cormorant Garamond', serif; font-size: 1.5rem; font-weight: 400; color: var(--text-main); line-height: 1; }
+.ts-brand__sub { font-size: 8px; font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent-primary); margin-top: 4px; }
+.ts-biz {
+  font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted);
+  padding: 14px 8px 12px; margin-bottom: 10px; border-top: 1px solid var(--border-light);
+}
+.ts-biz b { color: var(--text-soft); font-weight: 600; }
+.ts-nav { display: flex; flex-direction: column; gap: 2px; flex-grow: 1; }
+.ts-navitem {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 11px 12px; border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius-md); border-left: 2px solid transparent;
+  font-family: 'Montserrat', sans-serif; font-size: 0.9rem; color: var(--text-soft);
+  text-align: left; transition: var(--transition-fast);
+}
+.ts-navitem:hover { background: var(--bg-elevated); color: var(--text-main); }
+.ts-navitem.active { background: var(--bg-elevated); color: var(--accent-primary); border-left-color: var(--accent-primary); }
+.ts-navitem.dim { opacity: 0.5; }
+.ts-navitem.dim:hover { opacity: 0.85; }
+.ts-navitem__ico { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; }
+.ts-navitem.active .ts-navitem__ico { filter: none; }
+.ts-navitem:not(.active) .ts-navitem__ico { filter: grayscale(0.55); }
+.ts-navitem__label { flex-grow: 1; }
+.ts-navitem__add { font-size: 0.58rem; font-weight: 600; letter-spacing: 0.1em; color: var(--accent-primary); border: 1px solid var(--accent-primary); border-radius: 3px; padding: 1px 6px; }
+.ts-navitem__ext { color: var(--text-muted); font-size: 0.8rem; }
+.ts-logout {
+  margin-top: 12px; width: 100%; padding: 12px; cursor: pointer;
+  background: transparent; border: 1px solid var(--border-light); color: var(--text-muted);
+  font-family: 'Montserrat', sans-serif; font-size: 10px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase;
+  transition: var(--transition-fast);
+}
+.ts-logout:hover { border-color: var(--accent-secondary); color: var(--accent-secondary); }
+.ts-main { flex-grow: 1; padding: 48px 56px; overflow-y: auto; }
+.ts-main__head { margin-bottom: 2.25rem; }
+.ts-main__head h2 { font-size: clamp(1.9rem, 3vw, 2.6rem); }
+
+@media (max-width: 860px) {
+  .app-container { flex-direction: column; }
+  .ts-side { width: 100%; min-height: auto; position: static; flex-direction: column; border-right: none; border-bottom: 1px solid var(--border-light); }
+  .ts-nav { flex-direction: row; flex-wrap: wrap; }
+  .ts-navitem { width: auto; }
+  .ts-main { padding: 28px 22px; }
 }
