@@ -1,0 +1,19 @@
+name = "townsquare"
+pages_build_output_dir = "dist"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 registry. Create once with:  wrangler d1 create townsquare
+# then paste the returned database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "townsquare"
+database_id = "REPLACE_AFTER_d1_create"
+
+# Secrets are NOT stored here. Set per environment with:
+#   wrangler pages secret put SESSION_SECRET    --project-name townsquare
+#   wrangler pages secret put HERALD_SECRET     --project-name townsquare
+#   wrangler pages secret put DRAWBRIDGE_SECRET --project-name townsquare
+#   wrangler pages secret put BELLTOWER_SECRET  --project-name townsquare
+#   wrangler pages secret put HEARTH_SECRET     --project-name townsquare
+# (HERALD/DRAWBRIDGE/BELLTOWER/HEARTH_SECRET = each product's existing SESSION_SECRET)

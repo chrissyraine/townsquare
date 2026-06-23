@@ -1,0 +1,12 @@
+# Copy to .dev.vars (gitignored) for local `wrangler pages dev dist`.
+# In production these are set as Cloudflare Pages secrets (see wrangler.toml).
+
+# TownSquare's OWN session-signing secret (any long random string).
+SESSION_SECRET="dev-townsquare-session-secret-change-me"
+
+# Each product's EXISTING SESSION_SECRET, so the broker can mint product-native
+# tokens. Pull each from that product's Cloudflare Pages secrets / .dev.vars.
+HERALD_SECRET="<Herald SESSION_SECRET>"
+DRAWBRIDGE_SECRET="<Drawbridge SESSION_SECRET>"
+BELLTOWER_SECRET="<Belltower SESSION_SECRET>"
+HEARTH_SECRET="<Hearth SESSION_SECRET>"
