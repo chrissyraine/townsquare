@@ -49,6 +49,7 @@ export default function Landing({ onLogin }) {
     { n: 'Drawbridge', d: 'Live menus', t: 'module' },
     { n: 'The Herald', d: 'Announcements & hours', t: 'module' },
     { n: 'The Forge', d: 'Design-it-yourself', t: 'launch tile' },
+    { n: 'The Courier', d: 'Calls & SMS', t: 'launch tile' },
   ];
 
   return (
@@ -149,6 +150,7 @@ export default function Landing({ onLogin }) {
               <span className="tsl-sib"><b>Belltower</b> · booking</span>
               <span className="tsl-sib"><b>Drawbridge</b> · live menus</span>
               <span className="tsl-sib"><b>The Forge</b> · design-it-yourself</span>
+              <span className="tsl-sib"><b>The Courier</b> · calls &amp; SMS</span>
             </div>
           </div>
         </section>

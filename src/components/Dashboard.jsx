@@ -11,10 +11,12 @@ const MODULES = [
   { key: 'drawbridge', label: 'Drawbridge', icon: <img src="/drawbridge.svg" alt="" style={{ width: 22, height: 22 }} /> },
   { key: 'belltower', label: 'Belltower', icon: <span style={{ fontSize: 18 }}>🔔</span> },
   { key: 'hearth', label: 'The Hearth', icon: <span style={{ fontSize: 18 }}>🔥</span> },
+  { key: 'courier', label: 'The Courier', icon: <span style={{ fontSize: 18 }}>✉️</span>, external: true },
   { key: 'forge', label: 'The Forge', icon: <span style={{ fontSize: 18 }}>⚒️</span>, external: true },
 ];
 
 const FORGE_URL = 'https://gettheforge.app';
+const COURIER_URL = 'https://the-courier.chrissy-499.workers.dev';
 
 export default function Dashboard({ business, onLogout }) {
   const modules = business?.modules || {};
@@ -25,7 +27,10 @@ export default function Dashboard({ business, onLogout }) {
     const meta = MODULES.find((m) => m.key === activeTab);
     if (!meta) return null;
 
-    if (meta.external) return <ForgeTile enrolled={!!modules.forge} />;
+    if (meta.external) {
+      if (activeTab === 'courier') return <CourierTile enrolled={!!modules.courier} />;
+      return <ForgeTile enrolled={!!modules.forge} />;
+    }
     if (!modules[activeTab]) return <Upsell label={meta.label} moduleKey={activeTab} />;
 
     switch (activeTab) {
@@ -119,6 +124,25 @@ function ForgeTile({ enrolled }) {
         </p>
         <a className="btn btn-primary" href={FORGE_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
           {enrolled ? 'Open The Forge ↗' : 'Explore The Forge ↗'}
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// The Courier isn't brokered (separate Worker + carrier) — launch-tile only.
+function CourierTile({ enrolled }) {
+  return (
+    <div className="animate-fade-in" style={{ maxWidth: '640px' }}>
+      <div className="eyebrow">The Courier</div>
+      <h2>Calls &amp; SMS</h2>
+      <div className="glass-panel" style={{ padding: '32px', marginTop: '16px' }}>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
+          Give your business its own number with missed-call text-back and a Claude-powered
+          agent that answers, qualifies leads, and books them — so a missed call becomes a job.
+        </p>
+        <a className="btn btn-primary" href={COURIER_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+          {enrolled ? 'Open The Courier ↗' : 'Explore The Courier ↗'}
         </a>
       </div>
     </div>
