@@ -87,6 +87,61 @@ async function api(request, env, url) {
     return json({ town, events: rows.results || [] });
   }
 
+  // Enriched town feed for the community app: registry directory + live signals
+  // (Drawbridge open/specials, Herald announcements) + events, in one cached call.
+  // Each product call is best-effort — a product outage just drops that signal.
+  if (path === '/api/public/town' && method === 'GET') {
+    const town = url.searchParams.get('town') || 'titusville';
+    const rows = await env.DB.prepare(
+      'SELECT slug,name,category,blurb,website,logo,primary_color,forge_url,product_slugs,modules FROM businesses WHERE town=? AND is_public=1 ORDER BY name'
+    ).bind(town).all();
+
+    const businesses = await Promise.all((rows.results || []).map(async (b) => {
+      const modules = parse(b.modules, {});
+      const pslugs = parse(b.product_slugs, {});
+      const live = {};
+
+      if (modules.drawbridge) {
+        try {
+          const r = await fetch(`${PRODUCTS.drawbridge.origin}/api/menu/${pslugs.drawbridge || b.slug}`, { cf: { cacheTtl: 120 } });
+          if (r.ok) {
+            const m = await r.json();
+            live.open_now = m.open_now;
+            live.specials = (m.specials || []).map((s) => ({ name: s.name, price: s.price })).slice(0, 6);
+          }
+        } catch { /* skip signal */ }
+      }
+      if (modules.herald) {
+        try {
+          const r = await fetch(`${PRODUCTS.herald.origin}/api/public/businesses/${pslugs.herald || b.slug}/feed`, { cf: { cacheTtl: 120 } });
+          if (r.ok) {
+            const f = await r.json();
+            if (f.announcement && f.announcement.text) live.announcement = f.announcement.text;
+            if (f.hours && f.hours.status && f.hours.status !== 'open') live.hours_note = f.hours.note || f.hours.status;
+          }
+        } catch { /* skip signal */ }
+      }
+
+      return {
+        slug: b.slug, name: b.name, category: b.category, blurb: b.blurb,
+        logo: b.logo, primary_color: b.primary_color, modules,
+        links: {
+          website: b.website || null,
+          menu: modules.drawbridge ? `${PRODUCTS.drawbridge.origin}/menu/${pslugs.drawbridge || b.slug}` : null,
+          book: modules.belltower ? `${PRODUCTS.belltower.origin}/book/?b=${pslugs.belltower || b.slug}` : null,
+          forge: modules.forge ? (b.forge_url || 'https://gettheforge.app') : null,
+        },
+        live,
+      };
+    }));
+
+    const ev = await env.DB.prepare(
+      "SELECT id,title,starts_at,ends_at,location,description FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') ORDER BY starts_at LIMIT 50"
+    ).bind(town).all();
+
+    return json({ town, businesses, events: ev.results || [] }, 200, { 'Cache-Control': 'public, max-age=120' });
+  }
+
   // ---- broker + proxy: /api/m/:product/<product-path> ----
   const m = path.match(/^\/api\/m\/([^/]+)(\/.*)?$/);
   if (m) {
