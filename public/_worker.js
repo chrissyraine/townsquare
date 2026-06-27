@@ -121,6 +121,24 @@ async function api(request, env, url) {
           }
         } catch { /* skip signal */ }
       }
+      if (modules.hearth) {
+        try {
+          const r = await fetch(`${PRODUCTS.hearth.origin}/api/public/rating/${pslugs.hearth || b.slug}`, { cf: { cacheTtl: 300 } });
+          if (r.ok) {
+            const d = await r.json();
+            if (d && d.count > 0) { live.rating = d.avg_rating; live.ratings = d.count; }
+          }
+        } catch { /* skip signal */ }
+      }
+      if (modules.belltower) {
+        try {
+          const r = await fetch(`${PRODUCTS.belltower.origin}/api/business/${pslugs.belltower || b.slug}/next?days=3`, { cf: { cacheTtl: 120 } });
+          if (r.ok) {
+            const d = await r.json();
+            if (d && d.next_slot) { live.next_slot = d.next_slot; live.next_service = d.service || null; }
+          }
+        } catch { /* skip signal */ }
+      }
 
       return {
         slug: b.slug, name: b.name, category: b.category, blurb: b.blurb,

@@ -87,7 +87,7 @@ export default function Landing({ onLogin }) {
             <p className="tsl-sub">Stop juggling a different login for every tool. TownSquare brings your reviews, bookings, live menu, and announcements under one roof — one sign-in, every tool, on one beautiful dashboard.</p>
             <div className="tsl-ctas">
               <a href="#signin" className="tsl-btn tsl-btn--p">Sign in to your hub</a>
-              <a href="#unifies" className="tsl-btn tsl-btn--g">See what it unifies</a>
+              <a href="https://titusvilletownsquare.pages.dev" target="_blank" rel="noopener" className="tsl-btn tsl-btn--g">See a live town</a>
             </div>
           </div>
         </section>
@@ -146,11 +146,11 @@ export default function Landing({ onLogin }) {
             <h2>Quietly powerful tools, <em>built by a real person.</em></h2>
             <p>TownSquare is made by <a href="https://www.foreverstillstudio.com" target="_blank" rel="noopener" style={{ color: 'var(--g)' }}>Forever Still Studio</a> — boutique web design and software for local businesses. Same care, same hands-on support, same person who answers her own phone.</p>
             <div className="tsl-sibs">
-              <span className="tsl-sib"><b>The Hearth</b> · reviews</span>
-              <span className="tsl-sib"><b>Belltower</b> · booking</span>
-              <span className="tsl-sib"><b>Drawbridge</b> · live menus</span>
-              <span className="tsl-sib"><b>The Forge</b> · design-it-yourself</span>
-              <span className="tsl-sib"><b>The Courier</b> · calls &amp; SMS</span>
+              <a className="tsl-sib" href="https://getthehearth.app" target="_blank" rel="noopener"><b>The Hearth</b> · reviews</a>
+              <a className="tsl-sib" href="https://getbelltower.app" target="_blank" rel="noopener"><b>Belltower</b> · booking</a>
+              <a className="tsl-sib" href="https://getdrawbridge.app" target="_blank" rel="noopener"><b>Drawbridge</b> · live menus</a>
+              <a className="tsl-sib" href="https://gettheforge.app" target="_blank" rel="noopener"><b>The Forge</b> · design-it-yourself</a>
+              <a className="tsl-sib" href="https://getthecourier.app" target="_blank" rel="noopener"><b>The Courier</b> · calls &amp; SMS</a>
             </div>
           </div>
         </section>
