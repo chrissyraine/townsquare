@@ -3,6 +3,7 @@ import HeraldModule from './HeraldModule';
 import DrawbridgeModule from './DrawbridgeModule';
 import BelltowerModule from './BelltowerModule';
 import HearthModule from './HearthModule';
+import CourierModule from './CourierModule';
 
 // Sidebar order + presentation. `external` modules (Forge) deep-link out instead
 // of rendering an in-hub panel.
@@ -11,12 +12,15 @@ const MODULES = [
   { key: 'drawbridge', label: 'Drawbridge', icon: <img src="/drawbridge.svg" alt="" style={{ width: 22, height: 22 }} /> },
   { key: 'belltower', label: 'Belltower', icon: <span style={{ fontSize: 18 }}>🔔</span> },
   { key: 'hearth', label: 'The Hearth', icon: <span style={{ fontSize: 18 }}>🔥</span> },
-  { key: 'courier', label: 'The Courier', icon: <span style={{ fontSize: 18 }}>✉️</span>, external: true },
+  { key: 'courier', label: 'The Courier', icon: <span style={{ fontSize: 18 }}>✉️</span> },
+  { key: 'paige', label: 'The Paige', icon: <span style={{ fontSize: 18 }}>📞</span>, external: true },
   { key: 'forge', label: 'The Forge', icon: <span style={{ fontSize: 18 }}>⚒️</span>, external: true },
 ];
 
 const FORGE_URL = 'https://gettheforge.app';
-const COURIER_URL = 'https://the-courier.chrissy-499.workers.dev';
+// The Paige (calls & SMS). getthepaige.app must be pointed at the existing
+// Paige worker (Cloudflare → the worker → Custom Domains) for this link to resolve.
+const PAIGE_URL = 'https://getthepaige.app';
 
 export default function Dashboard({ business, onLogout }) {
   const modules = business?.modules || {};
@@ -28,7 +32,7 @@ export default function Dashboard({ business, onLogout }) {
     if (!meta) return null;
 
     if (meta.external) {
-      if (activeTab === 'courier') return <CourierTile enrolled={!!modules.courier} />;
+      if (activeTab === 'paige') return <PaigeTile enrolled={!!modules.paige} />;
       return <ForgeTile enrolled={!!modules.forge} />;
     }
     if (!modules[activeTab]) return <Upsell label={meta.label} moduleKey={activeTab} />;
@@ -38,6 +42,7 @@ export default function Dashboard({ business, onLogout }) {
       case 'drawbridge': return <DrawbridgeModule business={business} />;
       case 'belltower': return <BelltowerModule business={business} />;
       case 'hearth': return <HearthModule business={business} />;
+      case 'courier': return <CourierModule business={business} />;
       default: return null;
     }
   };
@@ -95,6 +100,7 @@ function Upsell({ label, moduleKey }) {
     drawbridge: 'Run your live menu from your phone: mark items sold out and post daily specials in seconds.',
     belltower: 'Take bookings 24/7 — appointments, tables, or whole events — synced to your calendar.',
     hearth: 'Grow your Google reviews and catch unhappy customers privately, before they post.',
+    courier: 'Capture every message from your website contact form — recorded in your dashboard and emailed to you instantly, with an auto-reply to the customer. Never lose a lead.',
   }[moduleKey] || 'Add this module to your TownSquare.';
 
   return (
@@ -130,19 +136,19 @@ function ForgeTile({ enrolled }) {
   );
 }
 
-// The Courier isn't brokered (separate Worker + carrier) — launch-tile only.
-function CourierTile({ enrolled }) {
+// The Paige (calls & SMS) isn't brokered (separate Worker + carrier) — launch-tile only.
+function PaigeTile({ enrolled }) {
   return (
     <div className="animate-fade-in" style={{ maxWidth: '640px' }}>
-      <div className="eyebrow">The Courier</div>
+      <div className="eyebrow">The Paige</div>
       <h2>Calls &amp; SMS</h2>
       <div className="glass-panel" style={{ padding: '32px', marginTop: '16px' }}>
         <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>
           Give your business its own number with missed-call text-back and a Claude-powered
           agent that answers, qualifies leads, and books them — so a missed call becomes a job.
         </p>
-        <a className="btn btn-primary" href={COURIER_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-          {enrolled ? 'Open The Courier ↗' : 'Explore The Courier ↗'}
+        <a className="btn btn-primary" href={PAIGE_URL} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+          {enrolled ? 'Open The Paige ↗' : 'Explore The Paige ↗'}
         </a>
       </div>
     </div>

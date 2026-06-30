@@ -118,6 +118,15 @@ async function api(request, env, url) {
             const f = await r.json();
             if (f.announcement && f.announcement.text) live.announcement = f.announcement.text;
             if (f.hours && f.hours.status && f.hours.status !== 'open') live.hours_note = f.hours.note || f.hours.status;
+            if (Array.isArray(f.posts) && f.posts.length) {
+              live.social_posts = f.posts.map((p) => ({
+                author: b.name,
+                text: p.text,
+                image: p.image || null,
+                time: p.created_at,
+                type: p.source === 'facebook' ? 'facebook' : 'update',
+              }));
+            }
           }
         } catch { /* skip signal */ }
       }

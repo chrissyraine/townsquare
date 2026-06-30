@@ -24,6 +24,10 @@ export default function HeraldModule({ business }) {
   const [instagramConnected, setInstagramConnected] = useState(false);
   const [facebookConnected, setFacebookConnected] = useState(false);
 
+  const [crierText, setCrierText] = useState('');
+  const [crierPosts, setCrierPosts] = useState([]);
+  const [crierBusy, setCrierBusy] = useState(false);
+
   useEffect(() => {
     // Fetch current state on load
     const fetchState = async () => {
@@ -62,6 +66,13 @@ export default function HeraldModule({ business }) {
       }
     };
     fetchState();
+  }, [business.slug]);
+
+  useEffect(() => {
+    fetch(`${HERALD_API}/api/businesses/${business.slug}/crier`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && Array.isArray(d.posts)) setCrierPosts(d.posts); })
+      .catch(() => {});
   }, [business.slug]);
 
   const handleSave = async (e) => {
@@ -105,6 +116,40 @@ export default function HeraldModule({ business }) {
     }
   };
 
+  const postToCrier = async () => {
+    const text = crierText.trim();
+    if (!text) return;
+    setCrierBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`${HERALD_API}/api/businesses/${business.slug}/crier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: text }),
+      });
+      if (res.ok) {
+        setCrierText('');
+        const r = await fetch(`${HERALD_API}/api/businesses/${business.slug}/crier`);
+        if (r.ok) { const d = await r.json(); if (d && Array.isArray(d.posts)) setCrierPosts(d.posts); }
+        setMessage({ type: 'success', text: 'Posted to the Town Crier.' });
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        setMessage({ type: 'error', text: 'Could not post. Please try again.' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Could not post. Please try again.' });
+    } finally {
+      setCrierBusy(false);
+    }
+  };
+
+  const deleteCrierPost = async (id) => {
+    try {
+      await fetch(`${HERALD_API}/api/businesses/${business.slug}/crier/${id}`, { method: 'DELETE' });
+      setCrierPosts(crierPosts.filter((p) => p.id !== id));
+    } catch { /* ignore */ }
+  };
+
   const handleConnectMeta = async (platform) => {
     // In reality, this opens a popup to Meta OAuth, gets a code, and exchanges it for a token.
     // We mock that flow here and post the result to our API.
@@ -142,6 +187,38 @@ export default function HeraldModule({ business }) {
           Use the controls below to manage your operating hours and broadcast temporary announcements.
         </p>
       </header>
+
+      {/* Post to the Town Crier */}
+      <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
+        <h3 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>Post to the Town Crier</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '16px' }}>
+          Share a quick update &mdash; a special, an event, good news. It streams straight to the Town Crier on Titusville Square.
+        </p>
+        <textarea
+          className="input-field"
+          rows={3}
+          placeholder="e.g. Fresh cinnamon rolls out of the oven right now!"
+          value={crierText}
+          onChange={(e) => setCrierText(e.target.value)}
+          style={{ width: '100%', resize: 'vertical', marginBottom: '12px' }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="button" className="btn btn-primary" onClick={postToCrier} disabled={crierBusy || !crierText.trim()}>
+            {crierBusy ? 'Posting...' : 'Post to Town Crier'}
+          </button>
+        </div>
+        {crierPosts.length > 0 && (
+          <div style={{ marginTop: '20px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '16px' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '10px' }}>Recent posts</div>
+            {crierPosts.map((p) => (
+              <div key={p.id} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-soft)' }}>{p.body}</div>
+                <button type="button" onClick={() => deleteCrierPost(p.id)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem' }}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Social Connection */}
       <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>

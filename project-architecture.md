@@ -72,7 +72,7 @@ TownSquare replaces that with an owned identity + registry + token broker.
    product **only through the proxy**; a module that fails **degrades its own tab**
    and never breaks the dashboard. Not-enrolled → **"Add this module" upsell** tab.
 7. **Community app:** **per-town**, read-mostly aggregator. Flagship
-   `titusvilletownsquare.com` (Titusville). v1 scope = **yellow-pages directory +
+   `titusvillesquare.com` (Titusville). v1 scope = **yellow-pages directory +
    live signals (specials/hours/announcements/open-slots/ratings) + a town-wide,
    owner-posted events calendar**. **No customer accounts/follows in v1.**
 
@@ -159,7 +159,7 @@ activity_log
 
 ---
 
-## 5. Community app (titusvilletownsquare.com)
+## 5. Community app (titusvillesquare.com)
 
 Read-mostly **consumer** of the registry + the four products' existing public APIs;
 products stay independent (loose coupling). Data sources:
@@ -185,7 +185,7 @@ auto-populates the town directory → free local discovery/foot traffic.
   the four live products._
 - **Phase 2 — Hearth module:** wire the 5th module UI through the proxy.
 - **Phase 3 — Community app:** public projection endpoints + `town_events` + the
-  `titusvilletownsquare.com` frontend.
+  `titusvillesquare.com` frontend.
 - **Phase 4 — Onboarding/provisioning:** admin to enroll businesses, "Add this
   module" write-side (creates the row in the target product's D1).
 
