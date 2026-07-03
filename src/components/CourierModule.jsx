@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-// The Courier reads the inquiries captured by a tenant's website contact form.
+// Paige reads the inquiries captured by a tenant's website contact form.
 // Data lives in Belltower's inquiry engine; we reach it through the same
 // server-side broker the Belltower module uses (no tokens in the browser).
 const BELLTOWER_API = '/api/m/belltower';
@@ -40,13 +40,13 @@ export default function CourierModule({ business }) {
     }).catch(() => {});
   };
 
-  if (loading) return <div className="animate-fade-in">Loading The Courier…</div>;
+  if (loading) return <div className="animate-fade-in">Loading Paige…</div>;
 
   const newCount = inquiries.filter((i) => i.status === 'new').length;
 
   return (
     <div className="animate-fade-in">
-      <div className="eyebrow" style={{ color: '#DAA55E' }}>The Courier</div>
+      <div className="eyebrow" style={{ color: '#DAA55E' }}>Paige</div>
       <h2>
         Website messages
         {newCount > 0 && (

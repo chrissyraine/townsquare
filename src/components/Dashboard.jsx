@@ -12,7 +12,7 @@ const MODULES = [
   { key: 'drawbridge', label: 'Drawbridge', icon: <img src="/drawbridge.svg" alt="" style={{ width: 22, height: 22 }} /> },
   { key: 'belltower', label: 'Belltower', icon: <span style={{ fontSize: 18 }}>🔔</span> },
   { key: 'hearth', label: 'The Hearth', icon: <span style={{ fontSize: 18 }}>🔥</span> },
-  { key: 'courier', label: 'The Courier', icon: <span style={{ fontSize: 18 }}>✉️</span> },
+  { key: 'courier', label: 'Paige', icon: <span style={{ fontSize: 18 }}>✉️</span> },
   { key: 'paige', label: 'The Paige', icon: <span style={{ fontSize: 18 }}>📞</span>, external: true },
   { key: 'forge', label: 'The Forge', icon: <span style={{ fontSize: 18 }}>⚒️</span>, external: true },
 ];

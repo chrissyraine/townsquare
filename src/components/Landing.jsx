@@ -49,7 +49,7 @@ export default function Landing({ onLogin }) {
     { n: 'Drawbridge', d: 'Live menus', t: 'module' },
     { n: 'The Herald', d: 'Announcements & hours', t: 'module' },
     { n: 'The Forge', d: 'Design-it-yourself', t: 'launch tile' },
-    { n: 'The Courier', d: 'Calls & SMS', t: 'launch tile' },
+    { n: 'Paige', d: 'Calls & SMS', t: 'launch tile' },
   ];
 
   return (
@@ -150,7 +150,7 @@ export default function Landing({ onLogin }) {
               <a className="tsl-sib" href="https://getbelltower.app" target="_blank" rel="noopener"><b>Belltower</b> · booking</a>
               <a className="tsl-sib" href="https://getdrawbridge.app" target="_blank" rel="noopener"><b>Drawbridge</b> · live menus</a>
               <a className="tsl-sib" href="https://gettheforge.app" target="_blank" rel="noopener"><b>The Forge</b> · design-it-yourself</a>
-              <a className="tsl-sib" href="https://getthecourier.app" target="_blank" rel="noopener"><b>The Courier</b> · calls &amp; SMS</a>
+              <a className="tsl-sib" href="https://getthepaige.app" target="_blank" rel="noopener"><b>Paige</b> · calls &amp; SMS</a>
             </div>
           </div>
         </section>
