@@ -10,6 +10,18 @@ binding = "DB"
 database_name = "townsquare"
 database_id = "de3d1aaf-a3c2-4e96-85eb-0e40452dd595"
 
+# Cross-product provisioning: self-serve signup (/api/public/join) writes the new
+# owner's row into these product DBs so their account exists everywhere on payment.
+[[d1_databases]]
+binding = "HERALD_DB"
+database_name = "herald"
+database_id = "869c2b31-c12b-405e-ab44-858acd91a7cf"
+
+[[d1_databases]]
+binding = "DRAWBRIDGE_DB"
+database_name = "drawbridge"
+database_id = "98cb95f1-5d7f-465f-91e3-526a2a89b99b"
+
 # Secrets are NOT stored here. Set per environment with:
 #   wrangler pages secret put SESSION_SECRET    --project-name townsquare
 #   wrangler pages secret put HERALD_SECRET     --project-name townsquare
@@ -17,3 +29,8 @@ database_id = "de3d1aaf-a3c2-4e96-85eb-0e40452dd595"
 #   wrangler pages secret put BELLTOWER_SECRET  --project-name townsquare
 #   wrangler pages secret put HEARTH_SECRET     --project-name townsquare
 # (HERALD/DRAWBRIDGE/BELLTOWER/HEARTH_SECRET = each product's existing SESSION_SECRET)
+#
+# Self-serve signup also needs the PayPal REST app credentials (verifies payments):
+#   wrangler pages secret put PAYPAL_CLIENT_ID  --project-name townsquare
+#   wrangler pages secret put PAYPAL_SECRET     --project-name townsquare
+# Optional: PAYPAL_PLAN_IDS (comma list of accepted plan ids; defaults to the Founding-50 plan)

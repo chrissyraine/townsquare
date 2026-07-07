@@ -18,7 +18,7 @@
 //   Herald/Drawbridge/Belltower : exp in ms,  signature base64url
 //   Hearth                      : exp in sec, signature hex
 
-import { createHmac, scryptSync, timingSafeEqual } from 'crypto';
+import { createHmac, scryptSync, timingSafeEqual, randomBytes } from 'crypto';
 
 const PRODUCTS = {
   herald:     { origin: 'https://theherald.pages.dev', scope: 'business', secret: 'HERALD_SECRET',     fmt: 'ms'  },
@@ -28,6 +28,9 @@ const PRODUCTS = {
   // forge is NOT brokered — it's a launch-tile/deep-link only (see project-architecture.md §3a)
 };
 const TTL_MS = 12 * 3600 * 1000;
+// Public PayPal client-id (same one already on the join.html subscribe button). The
+// paired *secret* is set as a Worker secret (PAYPAL_SECRET); env can override this id.
+const PAYPAL_LIVE_CLIENT_ID = 'Ab48DLR-FRpiFhHrgbRZUv8JxyhQ1u9jl_aPrBC4Yd6AkYu-Z4ck8I6iiRd-miZFCyFUq3TSPcs0D6EJ';
 
 export default {
   async fetch(request, env) {
@@ -40,6 +43,14 @@ export default {
   },
 };
 
+// Admin gate for event management: the PIN must match the titusville-square account.
+async function squareOk(pin, env) {
+  if (!pin) return false;
+  const biz = await env.DB.prepare("SELECT salt,pin_hash FROM businesses WHERE slug='titusville-square'").first();
+  if (!biz) return false;
+  try { return verifyPin(String(pin), biz.salt, biz.pin_hash); } catch { return false; }
+}
+
 async function api(request, env, url) {
   const path = url.pathname;
   const method = request.method;
@@ -51,8 +62,10 @@ async function api(request, env, url) {
     const biz = await env.DB.prepare('SELECT * FROM businesses WHERE slug=?').bind(slug).first();
     if (!biz || !verifyPin(pin, biz.salt, biz.pin_hash)) return json({ error: 'invalid_login' }, 401);
     const session = signClassic({ slug: biz.slug, exp: Date.now() + TTL_MS }, env.SESSION_SECRET);
+    // `token` lets a cross-origin owner UI (e.g. titusvillesquare.com/manage.html) authenticate
+    // via Authorization: Bearer, since the httpOnly cookie can't ride cross-site.
     return json(
-      { slug: biz.slug, name: biz.name, town: biz.town, modules: parse(biz.modules, {}) },
+      { slug: biz.slug, name: biz.name, town: biz.town, modules: parse(biz.modules, {}), token: session },
       200,
       { 'Set-Cookie': cookie('ts_session', session, TTL_MS / 1000) }
     );
@@ -82,9 +95,105 @@ async function api(request, env, url) {
   if (path === '/api/public/events' && method === 'GET') {
     const town = url.searchParams.get('town') || 'titusville';
     const rows = await env.DB.prepare(
-      "SELECT id,title,starts_at,ends_at,location,description FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') ORDER BY starts_at"
+      "SELECT id,title,starts_at,ends_at,location,description,is_kids FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') ORDER BY starts_at"
     ).bind(town).all();
     return json({ town, events: rows.results || [] });
+  }
+
+  // ---- public: submit an event (lands as a hidden draft for review) ----
+  if (path === '/api/public/events/submit' && method === 'POST') {
+    const b = await readBody(request);
+    if (b && b.hp) return json({ ok: true }); // honeypot: silently drop bots
+    const title = String(b.title || '').trim().slice(0, 120);
+    const starts_at = String(b.starts_at || '').trim().slice(0, 16);
+    if (!title || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(starts_at)) {
+      return json({ error: 'A title and a valid date/time are required.' }, 400);
+    }
+    const ends_at = String(b.ends_at || '').trim().slice(0, 16) || null;
+    const location = String(b.location || '').trim().slice(0, 120) || null;
+    let description = String(b.description || '').trim().slice(0, 600) || null;
+    const submitter = String(b.submitter || '').trim().slice(0, 160);
+    if (submitter) description = `${description || ''}\n\n— submitted by ${submitter}`.trim();
+    const is_kids = b.is_kids ? 1 : 0;
+    const town = String(b.town || 'titusville');
+    await env.DB.prepare(
+      "INSERT INTO town_events (town, title, starts_at, ends_at, location, description, is_published, is_kids, source) VALUES (?,?,?,?,?,?,0,?, 'submitted')"
+    ).bind(town, title, starts_at, ends_at, location, description, is_kids).run();
+    return json({ ok: true });
+  }
+
+  // ---- public: self-serve signup — verify payment, then provision across products ----
+  if (path === '/api/public/join' && method === 'POST') {
+    const b = await readBody(request);
+    if (b && b.hp) return json({ ok: true }); // honeypot: silently drop bots
+    const name = String(b.name || '').trim().slice(0, 120);
+    const pin = String(b.pin || '').trim();
+    const subId = String(b.subscriptionID || b.subscription_id || '').trim();
+    const email = String(b.email || '').trim().slice(0, 160) || null;
+    const phone = String(b.phone || '').trim().slice(0, 40) || null;
+    const category = String(b.category || '').trim().slice(0, 80) || null;
+    const blurb = String(b.blurb || '').trim().slice(0, 300) || null;
+    const website = String(b.website || '').trim().slice(0, 200) || null;
+    if (!name) return json({ error: 'Business name is required.' }, 400);
+    if (!/^\d{4,8}$/.test(pin)) return json({ error: 'Choose a 4–8 digit PIN.' }, 400);
+    if (!subId) return json({ error: 'Please complete payment first.' }, 400);
+
+    // 1) Verify the payment is real + active with PayPal (server-side).
+    const pp = await verifyPayPalSubscription(env, subId);
+    if (!pp.ok) return json({ error: 'payment_unverified', detail: pp.error, status: pp.status || null }, 402);
+    const allowed = String(env.PAYPAL_PLAN_IDS || 'P-6YJ33771Y6287535FNJDLG4I').split(',').map((s) => s.trim());
+    if (pp.plan_id && !allowed.includes(pp.plan_id)) return json({ error: 'plan_mismatch', plan: pp.plan_id }, 402);
+
+    // 2) Idempotency — if this subscription already provisioned, return that account.
+    const existing = await env.DB.prepare('SELECT slug FROM businesses WHERE subscription_id=?').bind(subId).first();
+    if (existing) return json({ ok: true, slug: existing.slug, already: true });
+
+    // 3) Identifiers + hashes (hub uses random salt; products use static-salt — same PIN works everywhere).
+    const slug = await uniqueSlug(env, slugify(name));
+    const salt = randomBytes(16).toString('hex');
+    const hubHash = hashPin(pin, salt);
+    const prodHash = hashPinStatic(pin);
+    const modules = JSON.stringify({ herald: true, drawbridge: true });
+
+    // 4) Create the hub account (public immediately).
+    await env.DB.prepare(
+      "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,category,blurb,phone,website,email,subscription_id,created_via,is_public) VALUES (?,?,'titusville',?,?,?,?,?,?,?,?,?,'self-serve',1)"
+    ).bind(slug, name, hubHash, salt, modules, category, blurb, phone, website, email, subId).run();
+
+    // 5) Provision the product accounts (best-effort; a product hiccup shouldn't undo a paid signup).
+    const warn = [];
+    try { await env.HERALD_DB.prepare('INSERT OR IGNORE INTO businesses (name,slug,pin_hash) VALUES (?,?,?)').bind(name, slug, prodHash).run(); }
+    catch (e) { warn.push('herald:' + String(e)); }
+    try { await env.DRAWBRIDGE_DB.prepare('INSERT OR IGNORE INTO restaurants (slug,name,pin_hash,is_open) VALUES (?,?,?,1)').bind(slug, name, prodHash).run(); }
+    catch (e) { warn.push('drawbridge:' + String(e)); }
+
+    return json({ ok: true, slug, warn: warn.length ? warn : undefined });
+  }
+
+  // ---- square admin: manage events (PIN = the titusville-square account) ----
+  if (path === '/api/square/events' && method === 'POST') {
+    const b = await readBody(request);
+    if (!(await squareOk(b && b.pin, env))) return json({ error: 'invalid_pin' }, 401);
+    const act = b.action;
+    if (act === 'list') {
+      const rows = await env.DB.prepare(
+        "SELECT id,title,starts_at,ends_at,location,description,is_published,is_kids,source FROM town_events WHERE town='titusville' ORDER BY is_published ASC, starts_at ASC"
+      ).all();
+      return json({ events: rows.results || [] });
+    }
+    if (act === 'publish' && b.id) {
+      await env.DB.prepare('UPDATE town_events SET is_published=1 WHERE id=?').bind(b.id).run();
+      return json({ ok: true });
+    }
+    if (act === 'kids' && b.id) {
+      await env.DB.prepare('UPDATE town_events SET is_kids=? WHERE id=?').bind(b.kids ? 1 : 0, b.id).run();
+      return json({ ok: true });
+    }
+    if (act === 'delete' && b.id) {
+      await env.DB.prepare('DELETE FROM town_events WHERE id=?').bind(b.id).run();
+      return json({ ok: true });
+    }
+    return json({ error: 'bad_action' }, 400);
   }
 
   // Enriched town feed for the community app: registry directory + live signals
@@ -117,7 +226,10 @@ async function api(request, env, url) {
           if (r.ok) {
             const f = await r.json();
             if (f.announcement && f.announcement.text) live.announcement = f.announcement.text;
-            if (f.hours && f.hours.status && f.hours.status !== 'open') live.hours_note = f.hours.note || f.hours.status;
+            if (f.hours) {
+              if (f.hours.status && f.hours.status !== 'open') live.hours_note = f.hours.note || f.hours.status;
+              live.hours_today = { status: f.hours.status || null, open: f.hours.open_time || null, close: f.hours.close_time || null };
+            }
             if (Array.isArray(f.posts) && f.posts.length) {
               live.social_posts = f.posts.map((p) => ({
                 author: b.name,
@@ -163,7 +275,7 @@ async function api(request, env, url) {
     }));
 
     const ev = await env.DB.prepare(
-      "SELECT id,title,starts_at,ends_at,location,description FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') ORDER BY starts_at LIMIT 50"
+      "SELECT id,title,starts_at,ends_at,location,description,is_kids FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') ORDER BY starts_at LIMIT 50"
     ).bind(town).all();
 
     return json({ town, businesses, events: ev.results || [] }, 200, { 'Cache-Control': 'public, max-age=120' });
@@ -244,6 +356,10 @@ function verifyClassic(token, secret) {
   return p;
 }
 function sessionFrom(request, env) {
+  // Bearer token (cross-origin owner UI) takes precedence, then the httpOnly cookie (same-site SPA).
+  const auth = request.headers.get('Authorization') || '';
+  const bearer = auth.match(/^Bearer\s+(.+)$/i);
+  if (bearer) { const p = verifyClassic(bearer[1].trim(), env.SESSION_SECRET); if (p) return p; }
   const c = (request.headers.get('Cookie') || '').match(/(?:^|;\s*)ts_session=([^;]+)/);
   return c ? verifyClassic(decodeURIComponent(c[1]), env.SESSION_SECRET) : null;
 }
@@ -256,6 +372,43 @@ function verifyPin(pin, saltHex, hashHex) {
   if (!saltHex || !hashHex) return false;
   const a = Buffer.from(hashPin(pin, saltHex), 'hex'), b = Buffer.from(hashHex, 'hex');
   return a.length === b.length && timingSafeEqual(a, b);
+}
+// Products (Herald/Drawbridge) hash PINs with a STATIC zero salt. We compute this too,
+// so the same PIN the owner picks works via the hub broker AND directly in each product.
+function hashPinStatic(pin) {
+  return scryptSync(String(pin), Buffer.alloc(16, 0), 32, { N: 16384, r: 8, p: 1 }).toString('hex');
+}
+
+// ---- self-serve provisioning helpers --------------------------------------
+function slugify(name) {
+  return String(name || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'business';
+}
+async function uniqueSlug(env, base) {
+  let slug = base, n = 1;
+  while (await env.DB.prepare('SELECT 1 FROM businesses WHERE slug=?').bind(slug).first()) { slug = `${base}-${++n}`; }
+  return slug;
+}
+// Verify a PayPal subscription is real and active via the REST API (server-side, so a
+// spoofed client onApprove can't mint a free account). Needs PAYPAL_CLIENT_ID/SECRET secrets.
+async function verifyPayPalSubscription(env, subId) {
+  const id = env.PAYPAL_CLIENT_ID || PAYPAL_LIVE_CLIENT_ID, secret = env.PAYPAL_SECRET;
+  if (!id || !secret) return { ok: false, error: 'paypal_unconfigured' };
+  if (!subId) return { ok: false, error: 'missing_subscription' };
+  const base = env.PAYPAL_API_BASE || 'https://api-m.paypal.com';
+  const basic = Buffer.from(`${id}:${secret}`).toString('base64');
+  const tok = await fetch(`${base}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: { Authorization: 'Basic ' + basic, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=client_credentials',
+  }).then((r) => r.json()).catch(() => null);
+  if (!tok || !tok.access_token) return { ok: false, error: 'paypal_auth_failed' };
+  const sub = await fetch(`${base}/v1/billing/subscriptions/${encodeURIComponent(subId)}`, {
+    headers: { Authorization: 'Bearer ' + tok.access_token },
+  }).then((r) => r.json()).catch(() => null);
+  if (!sub || !sub.id) return { ok: false, error: 'subscription_not_found' };
+  if (sub.status !== 'ACTIVE' && sub.status !== 'APPROVED') return { ok: false, error: 'subscription_not_active', status: sub.status };
+  return { ok: true, plan_id: sub.plan_id || null, status: sub.status, subscriber: sub.subscriber || null };
 }
 
 // ---- misc -----------------------------------------------------------------
