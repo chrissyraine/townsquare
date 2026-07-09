@@ -502,19 +502,17 @@ async function rateOk(env, ip, form) {
     return true;
   } catch { return true; } // never block a real submission on rate-limit infra trouble
 }
-// Best-effort notify via Cloudflare Email Workers (no third party). No-op until the
-// SEND_EMAIL binding + Email Routing are configured; the submission is already saved.
+// Best-effort notify. Pages can't send email directly, so we POST to the standalone
+// tsq-mailer Worker (which holds the send_email binding) with a shared Bearer secret.
+// No-op until MAILER_URL + MAILER_SECRET are set; the submission is already saved either way.
 async function notify(env, subject, body) {
   try {
-    if (!env.SEND_EMAIL) return;
-    const to = env.NOTIFY_TO || 'chrissy@foreverstillstudio.com';
-    const from = env.NOTIFY_FROM || 'square@titusvillesquare.com';
-    const { EmailMessage } = await import('cloudflare:email');
-    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const raw = `From: Titusville Square <${from}>\r\nTo: ${to}\r\nSubject: ${subject}\r\n` +
-      `Message-ID: <${id}@titusvillesquare.com>\r\nMIME-Version: 1.0\r\n` +
-      `Content-Type: text/plain; charset=utf-8\r\n\r\n${body}`;
-    await env.SEND_EMAIL.send(new EmailMessage(from, to, raw));
+    if (!env.MAILER_URL || !env.MAILER_SECRET) return;
+    await fetch(env.MAILER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + env.MAILER_SECRET },
+      body: JSON.stringify({ subject, body }),
+    });
   } catch { /* best-effort — submission is already stored + visible in admin */ }
 }
 
