@@ -170,6 +170,57 @@ async function api(request, env, url) {
     return json({ ok: true, slug, warn: warn.length ? warn : undefined });
   }
 
+  // ---- public: free-listing submission (Part 2) — lands in a review queue, no auto-publish ----
+  if (path === '/api/public/list-submit' && method === 'POST') {
+    const b = await readBody(request);
+    if (b && b.hp) return json({ ok: true }); // honeypot: silently accept + discard
+    const ip = clientIp(request);
+    if (!(await rateOk(env, ip, 'submission'))) return json({ error: 'rate_limited' }, 429);
+    const name = String(b.name || '').trim().slice(0, 120);
+    const category = String(b.category || '').trim().slice(0, 80);
+    const email = String(b.email || '').trim().slice(0, 160);
+    const description = String(b.description || '').trim().slice(0, 200);
+    if (!name || !category || !description) return json({ error: 'Business name, category, and a one-line description are required.' }, 400);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'A valid email is required.' }, 400);
+    if (!b.owner_ok) return json({ error: 'Please confirm you are the owner or authorized to submit this business.' }, 400);
+    const address = String(b.address || '').trim().slice(0, 200) || null;
+    const phone = String(b.phone || '').trim().slice(0, 40) || null;
+    const website = String(b.website || '').trim().slice(0, 200) || null;
+    const hours = String(b.hours || '').trim().slice(0, 400) || null;
+    const want_audit = b.want_audit ? 1 : 0;
+    await env.DB.prepare(
+      'INSERT INTO listing_submissions (name,category,address,phone,email,website,hours,description,want_audit,ip) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).bind(name, category, address, phone, email, website, hours, description, want_audit, ip).run();
+    await notify(env, `New Titusville Square listing: ${name}`,
+      `${name} (${category})\nEmail: ${email}\nPhone: ${phone || '-'}\nAddress: ${address || '-'}\nWebsite: ${website || '-'}\nHours: ${hours || '-'}\nFree audit requested: ${want_audit ? 'YES' : 'no'}\n\n${description}\n\nApprove/reject: https://titusvillesquare.com/manage-events.html`);
+    return json({ ok: true });
+  }
+
+  // ---- public: correction / removal request (Part 3) ----
+  if (path === '/api/public/list-request' && method === 'POST') {
+    const b = await readBody(request);
+    if (b && b.hp) return json({ ok: true }); // honeypot
+    const ip = clientIp(request);
+    if (!(await rateOk(env, ip, 'request'))) return json({ error: 'rate_limited' }, 429);
+    const business_name = String(b.business_name || '').trim().slice(0, 120);
+    const requester = String(b.requester || '').trim().slice(0, 120);
+    const email = String(b.email || '').trim().slice(0, 160);
+    const kindRaw = String(b.kind || '').trim();
+    const kind = kindRaw === 'remove' ? 'remove' : kindRaw === 'correct' ? 'correct' : '';
+    if (!business_name || !requester) return json({ error: 'Business name and your name are required.' }, 400);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'A valid email is required.' }, 400);
+    if (!kind) return json({ error: 'Please choose correct or remove.' }, 400);
+    const relationship = String(b.relationship || '').trim().slice(0, 40) || null;
+    const details = String(b.details || '').trim().slice(0, 800) || null;
+    await env.DB.prepare(
+      'INSERT INTO listing_requests (business_name,requester,email,relationship,kind,details,ip) VALUES (?,?,?,?,?,?,?)'
+    ).bind(business_name, requester, email, relationship, kind, details, ip).run();
+    const tag = kind === 'remove' ? '[REMOVAL]' : '[CORRECTION]';
+    await notify(env, `${tag} ${business_name}`,
+      `${tag}\nBusiness: ${business_name}\nFrom: ${requester} (${relationship || '-'})\nEmail: ${email}\n\n${details || '(no details given)'}\n\nTriage: https://titusvillesquare.com/manage-events.html`);
+    return json({ ok: true });
+  }
+
   // ---- square admin: manage events (PIN = the titusville-square account) ----
   if (path === '/api/square/events' && method === 'POST') {
     const b = await readBody(request);
@@ -191,6 +242,31 @@ async function api(request, env, url) {
     }
     if (act === 'delete' && b.id) {
       await env.DB.prepare('DELETE FROM town_events WHERE id=?').bind(b.id).run();
+      return json({ ok: true });
+    }
+    return json({ error: 'bad_action' }, 400);
+  }
+
+  // ---- square admin: listing queues (PIN = the titusville-square account) ----
+  if (path === '/api/square/listings' && method === 'POST') {
+    const b = await readBody(request);
+    if (!(await squareOk(b && b.pin, env))) return json({ error: 'invalid_pin' }, 401);
+    const act = b.action;
+    if (act === 'list') {
+      const subs = await env.DB.prepare(
+        "SELECT id,name,category,address,phone,email,website,hours,description,want_audit,status,created_at FROM listing_submissions ORDER BY (status='pending') DESC, created_at DESC LIMIT 200"
+      ).all();
+      const reqs = await env.DB.prepare(
+        "SELECT id,business_name,requester,email,relationship,kind,details,status,created_at FROM listing_requests ORDER BY (status='open') DESC, created_at DESC LIMIT 200"
+      ).all();
+      return json({ submissions: subs.results || [], requests: reqs.results || [] });
+    }
+    if (act === 'sub-status' && b.id && /^(pending|approved|rejected)$/.test(b.status || '')) {
+      await env.DB.prepare('UPDATE listing_submissions SET status=? WHERE id=?').bind(b.status, b.id).run();
+      return json({ ok: true });
+    }
+    if (act === 'req-status' && b.id && /^(open|resolved)$/.test(b.status || '')) {
+      await env.DB.prepare('UPDATE listing_requests SET status=? WHERE id=?').bind(b.status, b.id).run();
       return json({ ok: true });
     }
     return json({ error: 'bad_action' }, 400);
@@ -409,6 +485,37 @@ async function verifyPayPalSubscription(env, subId) {
   if (!sub || !sub.id) return { ok: false, error: 'subscription_not_found' };
   if (sub.status !== 'ACTIVE' && sub.status !== 'APPROVED') return { ok: false, error: 'subscription_not_active', status: sub.status };
   return { ok: true, plan_id: sub.plan_id || null, status: sub.status, subscriber: sub.subscriber || null };
+}
+
+// ---- listing-form helpers (rate limit + best-effort email) --------------------
+function clientIp(request) {
+  return request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
+}
+// 3 submissions per IP per hour, shared ledger. Records a hit on each accepted attempt.
+async function rateOk(env, ip, form) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM form_hits WHERE ip=? AND form=? AND created_at > datetime('now','-1 hour')"
+    ).bind(ip, form).first();
+    if (r && r.c >= 3) return false;
+    await env.DB.prepare('INSERT INTO form_hits (ip, form) VALUES (?,?)').bind(ip, form).run();
+    return true;
+  } catch { return true; } // never block a real submission on rate-limit infra trouble
+}
+// Best-effort notify via Cloudflare Email Workers (no third party). No-op until the
+// SEND_EMAIL binding + Email Routing are configured; the submission is already saved.
+async function notify(env, subject, body) {
+  try {
+    if (!env.SEND_EMAIL) return;
+    const to = env.NOTIFY_TO || 'chrissy@foreverstillstudio.com';
+    const from = env.NOTIFY_FROM || 'square@titusvillesquare.com';
+    const { EmailMessage } = await import('cloudflare:email');
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const raw = `From: Titusville Square <${from}>\r\nTo: ${to}\r\nSubject: ${subject}\r\n` +
+      `Message-ID: <${id}@titusvillesquare.com>\r\nMIME-Version: 1.0\r\n` +
+      `Content-Type: text/plain; charset=utf-8\r\n\r\n${body}`;
+    await env.SEND_EMAIL.send(new EmailMessage(from, to, raw));
+  } catch { /* best-effort — submission is already stored + visible in admin */ }
 }
 
 // ---- misc -----------------------------------------------------------------
