@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react';
 import Landing from './components/Landing';
 import Dashboard from './components/Dashboard';
 import SparkleTrail from './components/SparkleTrail';
+import AcceptInvite from './components/AcceptInvite';
 
 export default function App() {
   const [session, setSession] = useState(null);
   const [checking, setChecking] = useState(true);
+  const [inviteCode, setInviteCode] = useState(() => new URLSearchParams(window.location.search).get('invite'));
 
   // Restore session from the httpOnly cookie via the worker (no tokens in JS).
   useEffect(() => {
@@ -23,6 +25,11 @@ export default function App() {
     setSession(null);
   };
 
+  const clearInvite = () => {
+    setInviteCode(null);
+    window.history.replaceState({}, '', window.location.pathname);
+  };
+
   if (checking) {
     return (
       <>
@@ -30,6 +37,19 @@ export default function App() {
         <div className="login-wrapper">
           <div className="login-subtitle" style={{ opacity: 0.6 }}>Loading TownSquare…</div>
         </div>
+      </>
+    );
+  }
+
+  // An invite link is an explicit action to join as a (possibly different)
+  // identity — it takes priority even if this browser already has a valid
+  // session cookie for another business (e.g. the owner testing their own
+  // invite link, or someone already signed in elsewhere).
+  if (inviteCode) {
+    return (
+      <>
+        <SparkleTrail />
+        <AcceptInvite code={inviteCode} onAccepted={(data) => { setSession(data); clearInvite(); }} onCancel={clearInvite} />
       </>
     );
   }

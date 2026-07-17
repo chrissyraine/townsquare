@@ -34,7 +34,7 @@ export default function Landing({ onLogin }) {
       if (!res.ok) {
         setError(data.error === 'invalid_login' ? 'Invalid slug or PIN. Please try again.' : (data.error || 'Login failed.'));
       } else {
-        onLogin({ slug: data.slug, name: data.name, town: data.town, modules: data.modules || {} });
+        onLogin({ slug: data.slug, name: data.name, town: data.town, modules: data.modules || {}, role: data.role || null, userId: data.userId || null });
       }
     } catch {
       setError('Network error connecting to TownSquare.');

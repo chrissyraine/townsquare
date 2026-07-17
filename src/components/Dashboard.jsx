@@ -4,32 +4,55 @@ import DrawbridgeModule from './DrawbridgeModule';
 import BelltowerModule from './BelltowerModule';
 import HearthModule from './HearthModule';
 import CourierModule from './CourierModule';
+import DashboardHome from './DashboardHome';
+import BusinessProfileEditor from './BusinessProfileEditor';
+import HoursManager from './HoursManager';
+import EventsManager from './EventsManager';
+import TeamManager from './TeamManager';
+import PublicPreview from './PublicPreview';
+import { MODULES } from './moduleRegistry';
 
-// Sidebar order + presentation. `external` modules (Forge) deep-link out instead
-// of rendering an in-hub panel.
-const MODULES = [
-  { key: 'herald', label: 'The Herald', icon: <img src="/theherald.svg" alt="" style={{ width: 22, height: 22 }} /> },
-  { key: 'drawbridge', label: 'Drawbridge', icon: <img src="/drawbridge.svg" alt="" style={{ width: 22, height: 22 }} /> },
-  { key: 'belltower', label: 'Belltower', icon: <span style={{ fontSize: 18 }}>🔔</span> },
-  { key: 'hearth', label: 'The Hearth', icon: <span style={{ fontSize: 18 }}>🔥</span> },
-  { key: 'courier', label: 'Paige', icon: <span style={{ fontSize: 18 }}>✉️</span> },
-  { key: 'paige', label: 'The Paige', icon: <span style={{ fontSize: 18 }}>📞</span>, external: true },
-  { key: 'forge', label: 'The Forge', icon: <span style={{ fontSize: 18 }}>⚒️</span>, external: true },
+// Hub-native tabs — TownSquare's own data (profile/hours/events/team/preview),
+// as opposed to MODULES which are brokered into sibling products. Team is
+// hidden for STAFF sessions (team management is OWNER/MANAGER-only per the
+// role spec); the server enforces this independently either way.
+const HOME_TABS = [
+  { key: 'home', label: 'Home', emoji: '🏠' },
+  { key: 'profile', label: 'My Business', emoji: '🏛️' },
+  { key: 'hours', label: 'Hours', emoji: '🕰️' },
+  { key: 'events', label: 'Events', emoji: '📅' },
+  { key: 'team', label: 'Team', emoji: '👥', minRole: 'MANAGER' },
+  { key: 'preview', label: 'Public Preview', emoji: '👁️' },
 ];
 
 const FORGE_URL = 'https://gettheforge.app';
 // The Paige (calls & SMS). getthepaige.app must be pointed at the existing
 // Paige worker (Cloudflare → the worker → Custom Domains) for this link to resolve.
 const PAIGE_URL = 'https://getthepaige.app';
+const ROLE_RANK = { STAFF: 0, MANAGER: 1, OWNER: 2 };
 
 export default function Dashboard({ business, onLogout }) {
   const modules = business?.modules || {};
-  const firstEnrolled = MODULES.find((m) => modules[m.key] && !m.external)?.key || 'herald';
-  const [activeTab, setActiveTab] = useState(firstEnrolled);
+  const role = business?.role || 'STAFF';
+  const [activeTab, setActiveTab] = useState('home');
+
+  const visibleHomeTabs = HOME_TABS.filter((t) => !t.minRole || ROLE_RANK[role] >= ROLE_RANK[t.minRole]);
 
   const renderContent = () => {
+    switch (activeTab) {
+      case 'home': return <DashboardHome business={business} onNavigate={setActiveTab} />;
+      case 'profile': return <BusinessProfileEditor business={business} />;
+      case 'hours': return <HoursManager business={business} />;
+      case 'events': return <EventsManager business={business} />;
+      case 'team':
+        if (ROLE_RANK[role] < ROLE_RANK.MANAGER) return <DashboardHome business={business} onNavigate={setActiveTab} />;
+        return <TeamManager business={business} />;
+      case 'preview': return <PublicPreview />;
+      default: break;
+    }
+
     const meta = MODULES.find((m) => m.key === activeTab);
-    if (!meta) return null;
+    if (!meta) return <DashboardHome business={business} onNavigate={setActiveTab} />;
 
     if (meta.external) {
       if (activeTab === 'paige') return <PaigeTile enrolled={!!modules.paige} />;
@@ -61,7 +84,22 @@ export default function Dashboard({ business, onLogout }) {
           </span>
         </div>
 
-        <div className="ts-biz">Signed in as <b>{business?.name}</b></div>
+        <div className="ts-biz">Signed in as <b>{business?.userName || business?.name}</b></div>
+
+        <nav className="ts-nav">
+          {visibleHomeTabs.map((t) => (
+            <button
+              key={t.key}
+              className={`ts-navitem${activeTab === t.key ? ' active' : ''}`}
+              onClick={() => setActiveTab(t.key)}
+            >
+              <span className="ts-navitem__ico"><span style={{ fontSize: 18 }}>{t.emoji}</span></span>
+              <span className="ts-navitem__label">{t.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div style={{ borderTop: '1px solid var(--border-light)', margin: '12px 0' }} />
 
         <nav className="ts-nav">
           {MODULES.map((m) => {
@@ -74,7 +112,9 @@ export default function Dashboard({ business, onLogout }) {
                 className={`ts-navitem${active ? ' active' : ''}${dim ? ' dim' : ''}`}
                 onClick={() => setActiveTab(m.key)}
               >
-                <span className="ts-navitem__ico">{m.icon}</span>
+                <span className="ts-navitem__ico">
+                  {m.icon ? <img src={m.icon} alt="" style={{ width: 22, height: 22 }} /> : <span style={{ fontSize: 18 }}>{m.emoji}</span>}
+                </span>
                 <span className="ts-navitem__label">{m.label}</span>
                 {dim && <span className="ts-navitem__add">ADD</span>}
                 {m.external && <span className="ts-navitem__ext">↗</span>}
@@ -95,13 +135,8 @@ export default function Dashboard({ business, onLogout }) {
 
 // Shown when an owner opens a module they're not enrolled in — the upsell surface.
 function Upsell({ label, moduleKey }) {
-  const pitch = {
-    herald: 'Broadcast announcements and live hours straight onto your website — no logins to your site builder.',
-    drawbridge: 'Run your live menu from your phone: mark items sold out and post daily specials in seconds.',
-    belltower: 'Take bookings 24/7 — appointments, tables, or whole events — synced to your calendar.',
-    hearth: 'Grow your Google reviews and catch unhappy customers privately, before they post.',
-    courier: 'Capture every message from your website contact form — recorded in your dashboard and emailed to you instantly, with an auto-reply to the customer. Never lose a lead.',
-  }[moduleKey] || 'Add this module to your TownSquare.';
+  const meta = MODULES.find((m) => m.key === moduleKey);
+  const pitch = meta?.pitch || 'Add this module to your TownSquare.';
 
   return (
     <div className="animate-fade-in" style={{ maxWidth: '640px' }}>
@@ -109,7 +144,7 @@ function Upsell({ label, moduleKey }) {
       <h2>{label}</h2>
       <div className="glass-panel" style={{ padding: '32px', marginTop: '16px' }}>
         <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>{pitch}</p>
-        <button className="btn btn-primary" onClick={() => alert(`We'll set up ${label} for ${' '}your business. (Onboarding flow comes in a later phase.)`)}>
+        <button className="btn btn-primary" onClick={() => alert(`We'll set up ${label} for ${' '}your business. (Onboarding flow comes in a later phase.)`)}>
           Add {label} to my TownSquare
         </button>
       </div>

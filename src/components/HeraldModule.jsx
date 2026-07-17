@@ -15,12 +15,6 @@ export default function HeraldModule({ business }) {
     expiresAt: ''
   });
 
-  const [hoursOverride, setHoursOverride] = useState({
-    active: false,
-    status: 'closed', // 'closed', 'open_special'
-    note: ''
-  });
-
   const [crierText, setCrierText] = useState('');
   const [crierPosts, setCrierPosts] = useState([]);
   const [crierBusy, setCrierBusy] = useState(false);
@@ -41,16 +35,8 @@ export default function HeraldModule({ business }) {
             });
           }
 
-          // An override is ONLY these two statuses. This used to be `status !== 'open'`,
-          // which now also catches 'unknown' (a tenant who has never set hours) and would
-          // show the override toggle switched on with a nonsense status. (2026-07-16)
-          if (data.hours && (data.hours.status === 'closed' || data.hours.status === 'open_special')) {
-            setHoursOverride({
-              active: true,
-              status: data.hours.status,
-              note: data.hours.note || ''
-            });
-          }
+          // Hours (weekly + today's override + special dates) moved to HoursManager.jsx
+          // so hours management lives in one place. Herald still owns the data.
 
           // Social sync is not built — the feed always returns []. Nothing to read here.
           // See C:\foreverstill\integrations-roadmap.md.
@@ -81,7 +67,7 @@ export default function HeraldModule({ business }) {
         'Content-Type': 'application/json'
       };
 
-      // 1. Save Announcement
+      // Save Announcement (hours moved to the Hours tab — see HoursManager.jsx)
       await fetch(`${HERALD_API}/api/businesses/${business.slug}/announcement`, {
         method: 'POST',
         headers,
@@ -92,20 +78,9 @@ export default function HeraldModule({ business }) {
         })
       });
 
-      // 2. Save Hours Override
-      await fetch(`${HERALD_API}/api/businesses/${business.slug}/hours/override`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          active: hoursOverride.active,
-          status: hoursOverride.status,
-          note: hoursOverride.note
-        })
-      });
-
       setMessage({ type: 'success', text: 'Changes saved and syndicated successfully.' });
       setTimeout(() => setMessage(null), 3000);
-    } catch (err) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to save changes. Please try again.' });
     } finally {
       setSaving(false);
@@ -165,8 +140,9 @@ export default function HeraldModule({ business }) {
         <div className="eyebrow">The Herald</div>
         <h2>Freshness Layer</h2>
         <p style={{ color: 'var(--text-muted)' }}>
-          Post quick updates to the Town Crier, set your hours, and broadcast temporary announcements &mdash;
-          the freshness layer that keeps your listing on Titusville Square alive.
+          Post quick updates to the Town Crier and broadcast temporary announcements &mdash;
+          the freshness layer that keeps your listing on Titusville Square alive. (Manage your
+          hours in the Hours tab.)
         </p>
       </header>
 
@@ -223,51 +199,8 @@ export default function HeraldModule({ business }) {
       </section>
 
       <form onSubmit={handleSave}>
-        {/* Hours & Overrides */}
-        <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
-          <h3 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>Today's Status</h3>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '16px' }}>
-            Override your regular operating hours. Useful for holidays or unexpected closures.
-          </p>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.875rem' }}>
-              <input 
-                type="checkbox" 
-                checked={hoursOverride.active} 
-                onChange={(e) => setHoursOverride({...hoursOverride, active: e.target.checked})}
-                style={{ accentColor: 'var(--accent-primary)' }}
-              />
-              Override Regular Hours Today
-            </label>
-          </div>
-
-          {hoursOverride.active && (
-            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', animation: 'fadeIn 0.3s' }}>
-              <div className="input-group" style={{ flex: '1', minWidth: '200px' }}>
-                <label className="input-label">Status</label>
-                <select 
-                  className="input-field"
-                  value={hoursOverride.status}
-                  onChange={(e) => setHoursOverride({...hoursOverride, status: e.target.value})}
-                >
-                  <option value="closed">Closed Today</option>
-                  <option value="open_special">Special Hours</option>
-                </select>
-              </div>
-              <div className="input-group" style={{ flex: '2', minWidth: '200px' }}>
-                <label className="input-label">Public Note (Optional)</label>
-                <input 
-                  type="text" 
-                  className="input-field" 
-                  placeholder="e.g. Closed for the holidays"
-                  value={hoursOverride.note}
-                  onChange={(e) => setHoursOverride({...hoursOverride, note: e.target.value})}
-                />
-              </div>
-            </div>
-          )}
-        </section>
+        {/* Hours management (weekly schedule, today's override, special dates)
+            lives in the Hours tab now — see HoursManager.jsx. */}
 
         {/* Announcement Strip */}
         <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>

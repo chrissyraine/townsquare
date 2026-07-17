@@ -25,7 +25,52 @@ CREATE TABLE IF NOT EXISTS businesses (
   primary_color TEXT,
   forge_url     TEXT,                       -- deep-link target for the Forge launch tile
   is_public     INTEGER NOT NULL DEFAULT 0, -- gate for appearing in the town directory
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  -- added by migrate-join.sql:
+  email           TEXT,
+  subscription_id TEXT,
+  created_via     TEXT,
+  -- added by migrate-add-profile-fields.sql (owner-dashboard yellow-pages fields):
+  full_description TEXT,
+  secondary_categories TEXT,        -- JSON array of strings
+  service_area TEXT,
+  public_contact_preference TEXT,   -- 'phone'|'email'|'website'|'visit'
+  social_links TEXT,                -- JSON {facebook,instagram,other}
+  price_range TEXT,                 -- '$'|'$$'|'$$$'|'$$$$'
+  accessibility_info TEXT,
+  parking_info TEXT,
+  family_friendly INTEGER,          -- nullable tri-state
+  pet_friendly INTEGER,             -- nullable tri-state
+  appointment_required INTEGER,     -- nullable tri-state
+  service_notes TEXT
+);
+
+-- Multi-user team layer (migrate-add-users-roles.sql). businesses.pin_hash/salt
+-- is unchanged and is the OWNER's credential; a `users` OWNER row is lazily
+-- created reusing that same hash on first login post-migration.
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_id   INTEGER NOT NULL REFERENCES businesses(id),
+  name          TEXT NOT NULL,
+  pin_hash      TEXT NOT NULL,
+  salt          TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'STAFF',   -- 'OWNER' | 'MANAGER' | 'STAFF'
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  last_login_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS business_invitations (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_id      INTEGER NOT NULL REFERENCES businesses(id),
+  invite_code      TEXT NOT NULL UNIQUE,
+  name             TEXT,
+  role             TEXT NOT NULL DEFAULT 'STAFF',
+  invited_by       INTEGER REFERENCES users(id),
+  status           TEXT NOT NULL DEFAULT 'pending',
+  expires_at       TEXT NOT NULL,
+  accepted_user_id INTEGER REFERENCES users(id),
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Town-wide events (v1 community write-side; owner-posted)
@@ -39,7 +84,22 @@ CREATE TABLE IF NOT EXISTS town_events (
   location     TEXT,
   description  TEXT,
   is_published INTEGER NOT NULL DEFAULT 0,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  is_kids      INTEGER NOT NULL DEFAULT 0,   -- 1 = kid/family-friendly (Kids calendar)
+  source       TEXT NOT NULL DEFAULT 'curated', -- 'curated' (seed file) | 'submitted' (public form) | 'owner' (owner dashboard)
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  -- added by migrate-events-owner-fields.sql (owner-facing event management):
+  audience TEXT,
+  age_range TEXT,
+  category TEXT,
+  cost TEXT,
+  registration_required INTEGER NOT NULL DEFAULT 0,
+  registration_link TEXT,
+  contact_info TEXT,
+  image TEXT,                       -- URL only, Phase 1 (no upload)
+  accessibility_notes TEXT,
+  is_canceled INTEGER NOT NULL DEFAULT 0,       -- distinct from is_published: a canceled
+                                                 -- published event stays visible, badged
+  moderation_required INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS activity_log (
@@ -52,6 +112,9 @@ CREATE TABLE IF NOT EXISTS activity_log (
 
 CREATE INDEX IF NOT EXISTS idx_biz_town    ON businesses(town);
 CREATE INDEX IF NOT EXISTS idx_events_town ON town_events(town, starts_at);
+CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
+CREATE INDEX IF NOT EXISTS idx_invites_business ON business_invitations(business_id, status);
+CREATE INDEX IF NOT EXISTS idx_activity_business ON activity_log(business_id, created_at DESC);
 
 -- Seeding a tenant (run scripts/hash-pin.mjs <pin> to get salt + pin_hash):
 -- INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,is_public)
