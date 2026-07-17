@@ -28,6 +28,15 @@ const PRODUCTS = {
   // forge is NOT brokered — it's a launch-tile/deep-link only (see project-architecture.md §3a)
 };
 const TTL_MS = 12 * 3600 * 1000;
+// Town-feed event window. Bounded by TIME, not by a row count: a fixed LIMIT silently
+// hides whatever falls past it and the cut-off drifts as events are added — a plain
+// `LIMIT 50` hid 9 already-published events in Jul 2026 (59 upcoming, feed stopped at 50).
+// Six months is further ahead than a town calendar is realistically browsed, and the
+// window self-maintains as time passes. EVENT_CAP is a payload backstop only: it is far
+// above real volume (~59 upcoming across two months when this was written) and is not
+// expected to be hit. If it ever is, that is a signal to page the calendar, not to raise it.
+const EVENT_WINDOW = '+6 months';
+const EVENT_CAP = 500;
 // Public PayPal client-id (same one already on the join.html subscribe button). The
 // paired *secret* is set as a Worker secret (PAYPAL_SECRET); env can override this id.
 const PAYPAL_LIVE_CLIENT_ID = 'Ab48DLR-FRpiFhHrgbRZUv8JxyhQ1u9jl_aPrBC4Yd6AkYu-Z4ck8I6iiRd-miZFCyFUq3TSPcs0D6EJ';
@@ -351,8 +360,8 @@ async function api(request, env, url) {
     }));
 
     const ev = await env.DB.prepare(
-      "SELECT id,title,starts_at,ends_at,location,description,is_kids FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') ORDER BY starts_at LIMIT 50"
-    ).bind(town).all();
+      "SELECT id,title,starts_at,ends_at,location,description,is_kids FROM town_events WHERE town=? AND is_published=1 AND starts_at >= datetime('now','-1 day') AND starts_at < datetime('now',?) ORDER BY starts_at LIMIT ?"
+    ).bind(town, EVENT_WINDOW, EVENT_CAP).all();
 
     return json({ town, businesses, events: ev.results || [] }, 200, { 'Cache-Control': 'public, max-age=120' });
   }
