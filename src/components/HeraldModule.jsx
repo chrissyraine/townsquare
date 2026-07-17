@@ -21,9 +21,6 @@ export default function HeraldModule({ business }) {
     note: ''
   });
 
-  const [instagramConnected, setInstagramConnected] = useState(false);
-  const [facebookConnected, setFacebookConnected] = useState(false);
-
   const [crierText, setCrierText] = useState('');
   const [crierPosts, setCrierPosts] = useState([]);
   const [crierBusy, setCrierBusy] = useState(false);
@@ -44,7 +41,10 @@ export default function HeraldModule({ business }) {
             });
           }
 
-          if (data.hours && data.hours.status !== 'open') {
+          // An override is ONLY these two statuses. This used to be `status !== 'open'`,
+          // which now also catches 'unknown' (a tenant who has never set hours) and would
+          // show the override toggle switched on with a nonsense status. (2026-07-16)
+          if (data.hours && (data.hours.status === 'closed' || data.hours.status === 'open_special')) {
             setHoursOverride({
               active: true,
               status: data.hours.status,
@@ -52,12 +52,8 @@ export default function HeraldModule({ business }) {
             });
           }
 
-          // Check if we have connected social accounts
-          if (data.social_feed && data.social_feed.length > 0) {
-            const platforms = data.social_feed.map(p => p.platform);
-            if (platforms.includes('instagram')) setInstagramConnected(true);
-            if (platforms.includes('facebook')) setFacebookConnected(true);
-          }
+          // Social sync is not built — the feed always returns []. Nothing to read here.
+          // See C:\foreverstill\integrations-roadmap.md.
         }
       } catch (err) {
         console.error("Failed to load Herald state", err);
@@ -150,30 +146,16 @@ export default function HeraldModule({ business }) {
     } catch { /* ignore */ }
   };
 
-  const handleConnectMeta = async (platform) => {
-    // In reality, this opens a popup to Meta OAuth, gets a code, and exchanges it for a token.
-    // We mock that flow here and post the result to our API.
-    try {
-      const headers = {
-        'Content-Type': 'application/json'
-      };
-
-      await fetch(`${HERALD_API}/api/businesses/${business.slug}/meta-auth`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          platform: platform,
-          access_token: `mock-long-lived-token-${platform}-${Date.now()}`,
-          expires_in_days: 60
-        })
-      });
-
-      if (platform === 'instagram') setInstagramConnected(true);
-      if (platform === 'facebook') setFacebookConnected(true);
-    } catch (err) {
-      alert("Failed to connect to Meta.");
-    }
-  };
+  // handleConnectMeta was removed 2026-07-16. It POSTed a FAKE token
+  // (`mock-long-lived-token-…`) to /meta-auth, which stored it as though the business had
+  // really connected Instagram/Facebook — and the Herald feed then served an invented post
+  // on the client's own website. The buttons below are already disabled; this dead handler
+  // was the loaded gun sitting next to them.
+  //
+  // To build this for real: Meta Developer App + App Review, a genuine OAuth popup, exchange
+  // the code for a long-lived token, then POST that to /meta-auth (the endpoint is fine — it
+  // stores whatever it's given). See C:\foreverstill\integrations-roadmap.md.
+  // Do not re-add a mock.
 
   if (loading) return <div className="animate-fade-in">Loading Herald settings...</div>;
 
@@ -183,8 +165,8 @@ export default function HeraldModule({ business }) {
         <div className="eyebrow">The Herald</div>
         <h2>Freshness Layer</h2>
         <p style={{ color: 'var(--text-muted)' }}>
-          This module automatically pulls your latest social posts and menu specials. 
-          Use the controls below to manage your operating hours and broadcast temporary announcements.
+          Post quick updates to the Town Crier, set your hours, and broadcast temporary announcements &mdash;
+          the freshness layer that keeps your listing on Titusville Square alive.
         </p>
       </header>
 
@@ -222,34 +204,21 @@ export default function HeraldModule({ business }) {
 
       {/* Social Connection */}
       <section className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
-        <h3 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>Social Sync (Meta)</h3>
+        <h3 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>
+          Social Sync (Meta) <span style={{ fontSize: '0.7rem', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--accent-primary)', border: '1px solid var(--accent-primary)', borderRadius: '999px', padding: '2px 8px', marginLeft: '8px', verticalAlign: 'middle' }}>Coming soon</span>
+        </h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '16px' }}>
-          Connect your business Facebook and Instagram accounts to automatically mirror your latest posts to your website. 
-          You only need to authorize this once.
+          Soon you'll be able to connect your Facebook and Instagram accounts to automatically mirror your latest
+          posts here. It's not live yet &mdash; for now, use the Town Crier box above to share updates.
         </p>
-        
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-          {/* Instagram Connect */}
-          {instagramConnected ? (
-            <div className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'default', borderColor: 'var(--success)', color: 'var(--success)' }}>
-              <span>✓ Instagram Syncing</span>
-            </div>
-          ) : (
-            <button className="btn btn-outline" onClick={() => handleConnectMeta('instagram')}>
-              Connect Instagram
-            </button>
-          )}
 
-          {/* Facebook Connect */}
-          {facebookConnected ? (
-             <div className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'default', borderColor: 'var(--success)', color: 'var(--success)' }}>
-              <span>✓ Facebook Syncing</span>
-            </div>
-          ) : (
-            <button className="btn btn-outline" onClick={() => handleConnectMeta('facebook')}>
-              Connect Facebook Page
-            </button>
-          )}
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+          <div className="btn btn-outline" style={{ opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' }} aria-disabled="true">
+            Connect Instagram &middot; Coming soon
+          </div>
+          <div className="btn btn-outline" style={{ opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' }} aria-disabled="true">
+            Connect Facebook Page &middot; Coming soon
+          </div>
         </div>
       </section>
 
