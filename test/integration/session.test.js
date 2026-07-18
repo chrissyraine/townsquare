@@ -64,3 +64,58 @@ describe('login + OWNER auto-provisioning (existing single-PIN tenants)', () => 
     expect(data.ok).toBe(true);
   });
 });
+
+describe('shared-credential auto-provision guard', () => {
+  let env;
+  beforeEach(() => {
+    const { DB } = createTestD1();
+    env = { DB, SESSION_SECRET: SECRET };
+  });
+
+  async function seedSharedBusiness(env, slug, pin, salt) {
+    const pin_hash = hashPin(pin, salt);
+    const r = await env.DB.prepare('INSERT INTO businesses (slug, name, pin_hash, salt) VALUES (?,?,?,?)')
+      .bind(slug, slug, pin_hash, salt).run();
+    return r.meta.last_row_id;
+  }
+
+  it('refuses to auto-provision OWNER when the PIN hash/salt is shared across multiple businesses', async () => {
+    const salt = 'bb'.repeat(16);
+    await seedSharedBusiness(env, 'panel-biz-a', '4048', salt);
+    await seedSharedBusiness(env, 'panel-biz-b', '4048', salt);
+
+    const a = await call(worker, env, 'POST', '/api/auth/login', { body: { slug: 'panel-biz-a', pin: '4048' } });
+    expect(a.status).toBe(403);
+    expect(a.data.error).toBe('not_yet_claimed');
+
+    const b = await call(worker, env, 'POST', '/api/auth/login', { body: { slug: 'panel-biz-b', pin: '4048' } });
+    expect(b.status).toBe(403);
+    expect(b.data.error).toBe('not_yet_claimed');
+
+    const owners = await env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE role='OWNER'").first();
+    expect(owners.c).toBe(0);
+  });
+
+  it('still auto-provisions normally for a business with a unique PIN hash/salt', async () => {
+    await seedSharedBusiness(env, 'real-business', '9999', 'cc'.repeat(16));
+    const { status, data } = await call(worker, env, 'POST', '/api/auth/login', { body: { slug: 'real-business', pin: '9999' } });
+    expect(status).toBe(200);
+    expect(data.role).toBe('OWNER');
+  });
+
+  it('does not block a business that already has an active OWNER row, even if its hash is shared', async () => {
+    const salt = 'dd'.repeat(16);
+    await seedSharedBusiness(env, 'panel-biz-c', '4048', salt);
+    await seedSharedBusiness(env, 'panel-biz-d', '4048', salt);
+    // panel-biz-c gets manually claimed (a real OWNER row inserted directly, as the
+    // Part A production pre-flight backfill does) — it should log in normally afterward,
+    // even though its stored hash is still technically shared with panel-biz-d.
+    const biz = await env.DB.prepare('SELECT id, pin_hash, salt FROM businesses WHERE slug=?').bind('panel-biz-c').first();
+    await env.DB.prepare("INSERT INTO users (business_id, name, pin_hash, salt, role) VALUES (?,?,?,?,'OWNER')")
+      .bind(biz.id, 'panel-biz-c', biz.pin_hash, biz.salt).run();
+
+    const { status, data } = await call(worker, env, 'POST', '/api/auth/login', { body: { slug: 'panel-biz-c', pin: '4048' } });
+    expect(status).toBe(200);
+    expect(data.role).toBe('OWNER');
+  });
+});

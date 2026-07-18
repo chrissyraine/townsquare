@@ -94,6 +94,22 @@ async function api(request, env, url) {
         "SELECT id, role FROM users WHERE business_id=? AND role='OWNER' ORDER BY id LIMIT 1"
       ).bind(biz.id).first();
       if (!owner) {
+        // Refuse to auto-provision on a credential shared across multiple businesses —
+        // several dozen seeded "PANEL" listings share one placeholder PIN, and without
+        // this guard, knowing that one shared PIN grants full OWNER access to any of
+        // them. Self-defending (no hardcoded hash) so it survives a future reseed under
+        // a different placeholder. Real per-account credentials are unique by design, so
+        // this never blocks a legitimately-onboarded business.
+        const shared = await env.DB.prepare(
+          'SELECT COUNT(*) AS c FROM businesses WHERE pin_hash=? AND salt=?'
+        ).bind(biz.pin_hash, biz.salt).first();
+        if (shared && shared.c > 1) {
+          await audit(env, request, {
+            actor: biz.slug, action: 'auth.autoprovision_blocked', entity_type: 'businesses', entity_id: biz.id,
+            summary: `login PIN matched a credential shared across ${shared.c} businesses — refused to auto-provision OWNER`,
+          });
+          return json({ error: 'not_yet_claimed' }, 403);
+        }
         await env.DB.prepare(
           "INSERT INTO users (business_id, name, pin_hash, salt, role) VALUES (?,?,?,?,'OWNER')"
         ).bind(biz.id, biz.name, biz.pin_hash, biz.salt).run();

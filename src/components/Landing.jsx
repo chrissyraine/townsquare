@@ -32,7 +32,9 @@ export default function Landing({ onLogin }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.error === 'invalid_login' ? 'Invalid slug or PIN. Please try again.' : (data.error || 'Login failed.'));
+        if (data.error === 'invalid_login') setError('Invalid slug or PIN. Please try again.');
+        else if (data.error === 'not_yet_claimed') setError("This business hasn't been claimed yet.");
+        else setError(data.error || 'Login failed.');
       } else {
         onLogin({ slug: data.slug, name: data.name, town: data.town, modules: data.modules || {}, role: data.role || null, userId: data.userId || null });
       }
