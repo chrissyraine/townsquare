@@ -100,12 +100,20 @@ async function api(request, env, url) {
         owner = await env.DB.prepare(
           "SELECT id, role FROM users WHERE business_id=? AND role='OWNER' ORDER BY id LIMIT 1"
         ).bind(biz.id).first();
+        await audit(env, request, {
+          actor: biz.slug, action: 'user.autoprovision', entity_type: 'users', entity_id: owner && owner.id,
+          summary: 'OWNER row created from legacy business PIN on first login',
+        });
       }
       user = owner;
     }
 
     await env.DB.prepare("UPDATE users SET last_login_at=datetime('now') WHERE id=?").bind(user.id).run();
     await logActivity(env, biz.id, 'login', user.role);
+    await audit(env, request, {
+      actor: biz.slug, action: 'auth.login', entity_type: 'users', entity_id: user.id,
+      summary: `login as ${user.role}`,
+    });
 
     const session = signClassic({ slug: biz.slug, exp: Date.now() + TTL_MS, uid: user.id, role: user.role }, env.SESSION_SECRET);
     // `token` lets a cross-origin owner UI (e.g. titusvillesquare.com/manage.html) authenticate
@@ -176,9 +184,15 @@ async function api(request, env, url) {
     if (submitter) description = `${description || ''}\n\n— submitted by ${submitter}`.trim();
     const is_kids = b.is_kids ? 1 : 0;
     const town = String(b.town || 'titusville');
-    await env.DB.prepare(
+    const insEv = await env.DB.prepare(
       "INSERT INTO town_events (town, title, starts_at, ends_at, location, description, is_published, is_kids, source) VALUES (?,?,?,?,?,?,0,?, 'submitted')"
     ).bind(town, title, starts_at, ends_at, location, description, is_kids).run();
+    // Submitter name/contact is deliberately NOT audited — it's free-text PII that
+    // the public form collects. The event title and row id are enough to trace it.
+    await audit(env, request, {
+      actor: 'public', action: 'event.submit', entity_type: 'town_events', entity_id: insEv.meta.last_row_id,
+      summary: `public event draft submitted: "${title}" (${town}, unpublished)`,
+    });
     return json({ ok: true });
   }
 
@@ -216,16 +230,29 @@ async function api(request, env, url) {
     const modules = JSON.stringify({ herald: true, drawbridge: true });
 
     // 4) Create the hub account (public immediately).
-    await env.DB.prepare(
+    const insBiz = await env.DB.prepare(
       "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,category,blurb,phone,website,email,subscription_id,created_via,is_public) VALUES (?,?,'titusville',?,?,?,?,?,?,?,?,?,'self-serve',1)"
     ).bind(slug, name, hubHash, salt, modules, category, blurb, phone, website, email, subId).run();
+    // Audits the slug + name (both already public in the directory) and the PayPal
+    // subscription id — that last one is the traceability this log exists for: it
+    // ties an account that appeared out of nowhere back to a real payment. It is an
+    // identifier, not a credential (it grants nothing on its own), and audit_log is
+    // internal-only. The email, phone, and PIN supplied at signup stay out.
+    await audit(env, request, {
+      actor: 'public', action: 'business.create', entity_type: 'businesses', entity_id: insBiz.meta.last_row_id,
+      summary: `self-serve signup created "${name}" (${slug}), public immediately — PayPal subscription ${subId}`,
+    });
 
     // 5) Provision the product accounts (best-effort; a product hiccup shouldn't undo a paid signup).
     const warn = [];
-    try { await env.HERALD_DB.prepare('INSERT OR IGNORE INTO businesses (name,slug,pin_hash) VALUES (?,?,?)').bind(name, slug, prodHash).run(); }
-    catch (e) { warn.push('herald:' + String(e)); }
-    try { await env.DRAWBRIDGE_DB.prepare('INSERT OR IGNORE INTO restaurants (slug,name,pin_hash,is_open) VALUES (?,?,?,1)').bind(slug, name, prodHash).run(); }
-    catch (e) { warn.push('drawbridge:' + String(e)); }
+    try {
+      await env.HERALD_DB.prepare('INSERT OR IGNORE INTO businesses (name,slug,pin_hash) VALUES (?,?,?)').bind(name, slug, prodHash).run();
+      await audit(env, request, { actor: 'system', action: 'business.provision', entity_type: 'herald.businesses', entity_id: slug, summary: `provisioned Herald account for ${slug}` });
+    } catch (e) { warn.push('herald:' + String(e)); }
+    try {
+      await env.DRAWBRIDGE_DB.prepare('INSERT OR IGNORE INTO restaurants (slug,name,pin_hash,is_open) VALUES (?,?,?,1)').bind(slug, name, prodHash).run();
+      await audit(env, request, { actor: 'system', action: 'business.provision', entity_type: 'drawbridge.restaurants', entity_id: slug, summary: `provisioned Drawbridge account for ${slug}` });
+    } catch (e) { warn.push('drawbridge:' + String(e)); }
 
     return json({ ok: true, slug, warn: warn.length ? warn : undefined });
   }
@@ -248,9 +275,15 @@ async function api(request, env, url) {
     const website = String(b.website || '').trim().slice(0, 200) || null;
     const hours = String(b.hours || '').trim().slice(0, 400) || null;
     const want_audit = b.want_audit ? 1 : 0;
-    await env.DB.prepare(
+    const insSub = await env.DB.prepare(
       'INSERT INTO listing_submissions (name,category,address,phone,email,website,hours,description,want_audit,ip) VALUES (?,?,?,?,?,?,?,?,?,?)'
     ).bind(name, category, address, phone, email, website, hours, description, want_audit, ip).run();
+    // The submitter's email/phone/address stay in listing_submissions where the
+    // admin queue needs them; the audit row records only that a submission landed.
+    await audit(env, request, {
+      actor: 'public', action: 'listing.submit', entity_type: 'listing_submissions', entity_id: insSub.meta.last_row_id,
+      summary: `listing submitted for "${name}" (${category}), pending review`,
+    });
     await notify(env, `New Titusville Square listing: ${name}`,
       `${name} (${category})\nEmail: ${email}\nPhone: ${phone || '-'}\nAddress: ${address || '-'}\nWebsite: ${website || '-'}\nHours: ${hours || '-'}\nFree audit requested: ${want_audit ? 'YES' : 'no'}\n\n${description}\n\nApprove/reject: https://titusvillesquare.com/manage-events.html`);
     return json({ ok: true });
@@ -272,9 +305,15 @@ async function api(request, env, url) {
     if (!kind) return json({ error: 'Please choose correct or remove.' }, 400);
     const relationship = String(b.relationship || '').trim().slice(0, 40) || null;
     const details = String(b.details || '').trim().slice(0, 800) || null;
-    await env.DB.prepare(
+    const insReq = await env.DB.prepare(
       'INSERT INTO listing_requests (business_name,requester,email,relationship,kind,details,ip) VALUES (?,?,?,?,?,?,?)'
     ).bind(business_name, requester, email, relationship, kind, details, ip).run();
+    // Requester name/email and the free-text details are NOT audited — a removal
+    // request can carry personal circumstances. Business name + kind is the trace.
+    await audit(env, request, {
+      actor: 'public', action: `listing.request_${kind}`, entity_type: 'listing_requests', entity_id: insReq.meta.last_row_id,
+      summary: `${kind} request filed against listing "${business_name}"`,
+    });
     const tag = kind === 'remove' ? '[REMOVAL]' : '[CORRECTION]';
     await notify(env, `${tag} ${business_name}`,
       `${tag}\nBusiness: ${business_name}\nFrom: ${requester} (${relationship || '-'})\nEmail: ${email}\n\n${details || '(no details given)'}\n\nTriage: https://titusvillesquare.com/manage-events.html`);
@@ -294,14 +333,33 @@ async function api(request, env, url) {
     }
     if (act === 'publish' && b.id) {
       await env.DB.prepare('UPDATE town_events SET is_published=1 WHERE id=?').bind(b.id).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'event.publish', entity_type: 'town_events', entity_id: b.id,
+        summary: 'square admin published event',
+      });
       return json({ ok: true });
     }
     if (act === 'kids' && b.id) {
       await env.DB.prepare('UPDATE town_events SET is_kids=? WHERE id=?').bind(b.kids ? 1 : 0, b.id).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'event.flag_kids', entity_type: 'town_events', entity_id: b.id,
+        summary: `square admin set is_kids=${b.kids ? 1 : 0}`,
+      });
       return json({ ok: true });
     }
     if (act === 'delete' && b.id) {
+      // Read the row BEFORE deleting. This is the whole point of the audit trail:
+      // once the DELETE lands, entity_id alone is a dangling number and the record
+      // of WHAT vanished is gone with it. Four events were deleted here with no
+      // way to reconstruct them — the summary below is what was missing.
+      const doomed = await env.DB.prepare('SELECT title, starts_at, is_published FROM town_events WHERE id=?').bind(b.id).first();
       await env.DB.prepare('DELETE FROM town_events WHERE id=?').bind(b.id).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'event.delete', entity_type: 'town_events', entity_id: b.id,
+        summary: doomed
+          ? `square admin DELETED "${doomed.title}" (starts ${doomed.starts_at}, was ${doomed.is_published ? 'published' : 'a draft'})`
+          : 'square admin issued delete for an event id that no longer existed',
+      });
       return json({ ok: true });
     }
     return json({ error: 'bad_action' }, 400);
@@ -323,10 +381,18 @@ async function api(request, env, url) {
     }
     if (act === 'sub-status' && b.id && /^(pending|approved|rejected)$/.test(b.status || '')) {
       await env.DB.prepare('UPDATE listing_submissions SET status=? WHERE id=?').bind(b.status, b.id).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'listing.submission_status', entity_type: 'listing_submissions', entity_id: b.id,
+        summary: `square admin set submission status to ${b.status}`,
+      });
       return json({ ok: true });
     }
     if (act === 'req-status' && b.id && /^(open|resolved)$/.test(b.status || '')) {
       await env.DB.prepare('UPDATE listing_requests SET status=? WHERE id=?').bind(b.status, b.id).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'listing.request_status', entity_type: 'listing_requests', entity_id: b.id,
+        summary: `square admin set request status to ${b.status}`,
+      });
       return json({ ok: true });
     }
     return json({ error: 'bad_action' }, 400);
@@ -381,6 +447,12 @@ async function api(request, env, url) {
       'INSERT INTO business_invitations (business_id, invite_code, name, role, invited_by, expires_at) VALUES (?,?,?,?,?,?)'
     ).bind(ctx.businessId, invite_code, name, role, ctx.userId, expires_at).run();
     await logActivity(env, ctx.businessId, 'team_invited', `${name || 'teammate'} (${role})`);
+    // invite_code is a bearer credential — anyone holding it can join the team and
+    // set a PIN. It is deliberately absent from the audit row.
+    await audit(env, request, {
+      actor: ctx.slug, action: 'team.invite', entity_type: 'business_invitations', entity_id: ctx.businessId,
+      summary: `user #${ctx.userId} (OWNER) invited ${name || 'a teammate'} as ${role}`,
+    });
     return json({ ok: true, invite_code, expires_at });
   }
 
@@ -425,6 +497,14 @@ async function api(request, env, url) {
     const newUserId = ins.meta.last_row_id;
     await env.DB.prepare("UPDATE business_invitations SET status='accepted', accepted_user_id=? WHERE id=?").bind(newUserId, inv.id).run();
     await logActivity(env, inv.business_id, 'team_invited', `${name} accepted (${inv.role})`);
+    const acceptBiz = await env.DB.prepare('SELECT slug FROM businesses WHERE id=?').bind(inv.business_id).first();
+    // This route SETS a PIN. The PIN, its hash, and its salt are never audited —
+    // only the fact that a new credentialed user now exists on this team.
+    await audit(env, request, {
+      actor: (acceptBiz && acceptBiz.slug) || 'public', action: 'team.invite_accept',
+      entity_type: 'users', entity_id: newUserId,
+      summary: `invite accepted — new ${inv.role} user #${newUserId} created with their own PIN`,
+    });
 
     const biz = await env.DB.prepare('SELECT slug, name, town, modules FROM businesses WHERE id=?').bind(inv.business_id).first();
     const session = signClassic({ slug: biz.slug, exp: Date.now() + TTL_MS, uid: newUserId, role: inv.role }, env.SESSION_SECRET);
@@ -457,6 +537,10 @@ async function api(request, env, url) {
       // Soft-revoke only — never hard-delete, so activity_log referencing this user stays meaningful.
       await env.DB.prepare('UPDATE users SET is_active=0 WHERE id=?').bind(targetId).run();
       await logActivity(env, ctx.businessId, 'team_removed', targetId);
+      await audit(env, request, {
+        actor: ctx.slug, action: 'team.revoke', entity_type: 'users', entity_id: targetId,
+        summary: `user #${ctx.userId} (OWNER) revoked ${target.role} user #${targetId}`,
+      });
       return json({ ok: true });
     }
 
@@ -464,10 +548,21 @@ async function api(request, env, url) {
       if (!['OWNER', 'MANAGER', 'STAFF'].includes(body.role)) return json({ error: 'bad_role' }, 400);
       await env.DB.prepare('UPDATE users SET role=? WHERE id=?').bind(body.role, targetId).run();
       await logActivity(env, ctx.businessId, 'team_role_changed', `${targetId} -> ${body.role}`);
+      await audit(env, request, {
+        actor: ctx.slug, action: 'team.role_change', entity_type: 'users', entity_id: targetId,
+        summary: `user #${ctx.userId} (OWNER) changed user #${targetId} from ${target.role} to ${body.role}`,
+      });
     }
     if (body.is_active !== undefined) {
       await env.DB.prepare('UPDATE users SET is_active=? WHERE id=?').bind(body.is_active ? 1 : 0, targetId).run();
       if (!body.is_active) await logActivity(env, ctx.businessId, 'team_removed', targetId);
+      // Audited in BOTH directions. activity_log only records deactivation, so a
+      // revoked teammate being quietly REACTIVATED leaves no trace there at all.
+      await audit(env, request, {
+        actor: ctx.slug, action: body.is_active ? 'team.reactivate' : 'team.revoke',
+        entity_type: 'users', entity_id: targetId,
+        summary: `user #${ctx.userId} (OWNER) set user #${targetId} is_active=${body.is_active ? 1 : 0}`,
+      });
     }
     return json({ ok: true });
   }
@@ -527,6 +622,13 @@ async function api(request, env, url) {
     vals.push(ctx.businessId);
     await env.DB.prepare(`UPDATE businesses SET ${sets.join(', ')} WHERE id=?`).bind(...vals).run();
     await logActivity(env, ctx.businessId, 'profile_updated', Object.keys(b).join(','));
+    // Field NAMES only, never the submitted values: this payload can carry the
+    // business's phone and email, and `is_public` flips the whole listing's
+    // visibility — worth knowing it changed and who changed it.
+    await audit(env, request, {
+      actor: ctx.slug, action: 'business.profile_update', entity_type: 'businesses', entity_id: ctx.businessId,
+      summary: `user #${ctx.userId} (${ctx.role}) updated: ${sets.map((s) => s.replace('=?', '')).join(', ')}`,
+    });
     return json({ ok: true });
   }
 
@@ -583,6 +685,10 @@ async function api(request, env, url) {
       image, accessibility_notes, moderationRequired ? 1 : 0
     ).run();
     await logActivity(env, ctx.businessId, 'event_created', title);
+    await audit(env, request, {
+      actor: ctx.slug, action: 'event.create', entity_type: 'town_events', entity_id: ins.meta.last_row_id,
+      summary: `user #${ctx.userId} (${ctx.role}) created draft "${title}" (starts ${starts_at})`,
+    });
     return json({ ok: true, id: ins.meta.last_row_id });
   }
 
@@ -607,6 +713,13 @@ async function api(request, env, url) {
     if (!sets.length) return json({ error: 'no_fields' }, 400);
     vals.push(id);
     await env.DB.prepare(`UPDATE town_events SET ${sets.join(', ')} WHERE id=?`).bind(...vals).run();
+    // This route had NO logging of any kind before the audit trail: an owner could
+    // silently rewrite a published event's title, date, or location and nothing
+    // recorded it. Field names only — event copy is free text.
+    await audit(env, request, {
+      actor: ctx.slug, action: 'event.update', entity_type: 'town_events', entity_id: id,
+      summary: `user #${ctx.userId} (${ctx.role}) edited fields: ${sets.map((s) => s.replace('=?', '')).join(', ')}`,
+    });
     return json({ ok: true });
   }
 
@@ -618,8 +731,14 @@ async function api(request, env, url) {
     const ev = await env.DB.prepare('SELECT id, business_id, is_published FROM town_events WHERE id=?').bind(id).first();
     if (!ev || ev.business_id !== ctx.businessId) return json({ error: 'not_found' }, 404);
     if (ev.is_published) return json({ error: 'cannot_delete_published', detail: 'Cancel a published event instead of deleting it.' }, 400);
+    // Same reason as the square-admin delete: capture the title before the row goes.
+    const doomed = await env.DB.prepare('SELECT title, starts_at FROM town_events WHERE id=?').bind(id).first();
     await env.DB.prepare('DELETE FROM town_events WHERE id=?').bind(id).run();
     await logActivity(env, ctx.businessId, 'event_deleted', id);
+    await audit(env, request, {
+      actor: ctx.slug, action: 'event.delete', entity_type: 'town_events', entity_id: id,
+      summary: `user #${ctx.userId} (${ctx.role}) deleted draft "${doomed ? doomed.title : '(unknown)'}"`,
+    });
     return json({ ok: true });
   }
 
@@ -635,6 +754,10 @@ async function api(request, env, url) {
     }
     await env.DB.prepare('UPDATE town_events SET is_published=1 WHERE id=?').bind(id).run();
     await logActivity(env, ctx.businessId, 'event_published', id);
+    await audit(env, request, {
+      actor: ctx.slug, action: 'event.publish', entity_type: 'town_events', entity_id: id,
+      summary: `user #${ctx.userId} (${ctx.role}) published event — now live on the Square`,
+    });
     return json({ ok: true });
   }
 
@@ -647,6 +770,10 @@ async function api(request, env, url) {
     if (!ev || ev.business_id !== ctx.businessId) return json({ error: 'not_found' }, 404);
     await env.DB.prepare('UPDATE town_events SET is_canceled=1 WHERE id=?').bind(id).run();
     await logActivity(env, ctx.businessId, 'event_canceled', id);
+    await audit(env, request, {
+      actor: ctx.slug, action: 'event.cancel', entity_type: 'town_events', entity_id: id,
+      summary: `user #${ctx.userId} (${ctx.role}) canceled event`,
+    });
     return json({ ok: true });
   }
 
@@ -766,6 +893,20 @@ async function api(request, env, url) {
     } catch (err) {
       // loose coupling: a product outage degrades ONLY this module
       return json({ module: key, ok: false, error: 'module_unreachable', detail: String(err) }, 503);
+    }
+
+    // Audit brokered MUTATIONS only (GET/HEAD reads would drown the log). This is
+    // the sole path by which a hub session changes anything inside Herald /
+    // Drawbridge / Belltower / Hearth — including PIN changes, which have no hub
+    // endpoint of their own. We record the ENVELOPE (product, method, path, whose
+    // account) and never the request body, which is exactly where a new PIN or OTP
+    // would be. `rest` is the product-side path; url.search is dropped for the same
+    // reason. Logged after the call so a failed proxy isn't recorded as a change.
+    if (method !== 'GET' && method !== 'HEAD' && upstream.ok) {
+      await audit(env, request, {
+        actor: biz.slug, action: `broker.${key}.mutate`, entity_type: `${key}.proxy`, entity_id: pslug,
+        summary: `${method} ${rest} brokered to ${key} for ${pslug} (status ${upstream.status})`,
+      });
     }
 
     const respHeaders = new Headers(upstream.headers);
@@ -936,6 +1077,57 @@ async function logActivity(env, businessId, type, detail) {
     await env.DB.prepare('INSERT INTO activity_log (business_id, type, detail) VALUES (?,?,?)')
       .bind(businessId, type, detail == null ? null : String(detail)).run();
   } catch { /* best-effort — never block the real mutation on a logging failure */ }
+}
+
+// ---- audit log (internal-only mutation trail) ------------------------------
+// Distinct from activity_log above, which is a per-business feed the OWNER reads
+// in their dashboard. audit_log is INTERNAL: no route in this file reads it, and
+// none should be added. It exists to answer "who changed this, when, and what"
+// for every write path — including the two activity_log never covered: the
+// square-admin event DELETE (shared PIN) and the public self-serve join.
+//
+// NEVER logged here: PINs, PIN hashes, salts, OTPs, session tokens, invite codes,
+// phone numbers, email addresses, or raw IPs. When in doubt a field is omitted.
+// Actor sentinels: 'admin' (square PIN), 'public' (unauthenticated), 'system'.
+//
+// Like logActivity, this is best-effort by contract: a logging failure must never
+// fail the real mutation. Every call is awaited inside its own try/catch and
+// swallowed, so the caller's success path is unchanged whether or not the row
+// lands. Callers therefore never need to guard an audit() call themselves.
+async function audit(env, request, entry) {
+  try {
+    const { actor, action, entity_type = null, entity_id = null, summary = null } = entry;
+    await env.DB.prepare(
+      `INSERT INTO audit_log (ts, actor, action, entity_type, entity_id, summary, ip_hash, request_id)
+       VALUES (?,?,?,?,?,?,?,?)`
+    ).bind(
+      new Date().toISOString(),
+      String(actor),
+      String(action),
+      entity_type == null ? null : String(entity_type),
+      entity_id == null ? null : String(entity_id),
+      summary == null ? null : String(summary).slice(0, 300),
+      hashIp(request, env),
+      request ? (request.headers.get('CF-Ray') || null) : null,
+    ).run();
+  } catch { /* best-effort — never block or fail the real mutation on a logging error */ }
+}
+
+// Keyed HMAC of the client IP, truncated. A PLAIN hash would be pointless here:
+// IPv4 is ~4.3e9 values, so sha256(ip) is brute-forced back to the raw address in
+// seconds. Keying it with a Worker secret makes the digest correlatable (the same
+// visitor hashes the same way) without being reversible. Falls back to
+// SESSION_SECRET so the audit trail still works before AUDIT_IP_SALT is set;
+// returns null rather than a raw IP if neither secret exists.
+function hashIp(request, env) {
+  try {
+    if (!request) return null;
+    const key = env.AUDIT_IP_SALT || env.SESSION_SECRET;
+    if (!key) return null;
+    const ip = clientIp(request);
+    if (!ip || ip === 'unknown') return null;
+    return createHmac('sha256', key).update(ip).digest('hex').slice(0, 16);
+  } catch { return null; }
 }
 
 // ---- PIN auth (per-account random salt — fixes the products' static salt) --

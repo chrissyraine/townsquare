@@ -12,10 +12,17 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 // it's real SQLite executing the real schema.sql, which is enough to exercise
 // genuine SQL behavior (upserts, constraints, joins, COUNT aggregates) without
 // the added complexity of a full Workers-runtime test pool.
+// Migrations that must be layered on top of schema.sql for the test DB to match
+// what production actually has. Only additive, idempotent migrations belong here.
+const MIGRATIONS = ['migrate-audit-log.sql'];
+
 export function createTestD1() {
   const sqlite = new DatabaseSync(':memory:');
   const schema = fs.readFileSync(path.join(REPO_ROOT, 'schema.sql'), 'utf8');
   sqlite.exec(schema);
+  for (const file of MIGRATIONS) {
+    sqlite.exec(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'));
+  }
   return { DB: wrap(sqlite), _raw: sqlite };
 }
 
