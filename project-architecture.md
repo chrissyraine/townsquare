@@ -202,8 +202,89 @@ auto-populates the town directory → free local discovery/foot traffic.
 ---
 
 ## 8. Deployment (house convention)
-- Cloudflare Pages, **production branch = `production`**:
-  `wrangler pages deploy public --project-name townsquare --branch production --commit-dirty=true`
+- **Build first, then deploy `dist/` — NEVER `public/`.**
+  ```
+  npm run build
+  npx wrangler pages deploy dist --project-name townsquare --branch production
+  ```
+  `public/` holds only `_worker.js` plus loose static files — no `index.html` and
+  no bundled assets. Deploying it ships a site with no SPA at all. Vite copies
+  `public/*` into `dist/` at build time, and `wrangler.toml` already declares
+  `pages_build_output_dir = "dist"`. (This section said `public` until 2026-07-18;
+  it was wrong, and is the same class of mistake as the deploy-root exposure fixed
+  on eld-and-bjork and trinas-site that week.)
+- **Cloudflare Pages, production branch = `production`.**
+- Add `--commit-dirty=true` ONLY when knowingly deploying an unclean tree. Left
+  off, a dirty-tree refusal is a useful warning that local edits are about to ship.
 - Secrets via `wrangler pages secret put NAME --project-name townsquare`.
-- Local: `wrangler pages dev public --port 3010 --local`; `.dev.vars` (gitignored).
+  Currently set: `SESSION_SECRET`, `HERALD_SECRET`, `DRAWBRIDGE_SECRET`,
+  `BELLTOWER_SECRET`, `HEARTH_SECRET`, `MAILER_SECRET`, `PAYPAL_SECRET`,
+  `AUDIT_IP_SALT`.
+- Local: `npm run dev:full` (= `wrangler pages dev dist --local --port 3010`);
+  `.dev.vars` (gitignored). Build before running it, or you serve a stale `dist/`.
 - Cloudflare account id `4990efc04eeb0c6e3f44ccc7f96a03dc`.
+
+### Migration ledger
+Migrations are plain SQL files run by hand — there is no migration runner, so this
+list IS the record of what prod has. All are applied to the remote `townsquare` D1.
+
+| File | Adds | Applied |
+| :-- | :-- | :-- |
+| `schema.sql` | base tables (businesses, town_events, activity_log, …) | baseline |
+| `migrate-events-kids.sql` | `town_events.is_kids`, `.source` | ✅ 2026-07-01 |
+| `migrate-add-source.sql` | `town_events.source` (overlaps the above) | ✅ 2026-07-01 |
+| `migrate-join.sql` | self-serve signup columns | ✅ |
+| `migrate-listings.sql` | `listing_submissions`, `listing_requests`, `form_hits` | ✅ |
+| `migrate-add-profile-fields.sql` | yellow-pages profile columns | ✅ |
+| `migrate-add-users-roles.sql` | `users`, `business_invitations` | ✅ |
+| `migrate-events-owner-fields.sql` | owner-facing event columns | ✅ |
+| `migrate-activity-index.sql` | activity_log index | ✅ |
+| `migrate-audit-log.sql` | `audit_log` + 3 indexes | ✅ 2026-07-18 |
+
+Every migration must be **additive** (`CREATE ... IF NOT EXISTS` / `ALTER TABLE
+ADD COLUMN`). Never `DROP` or overwrite an existing table. Run `--local` first,
+then `--remote` after review.
+
+---
+
+## 9. Audit log (internal-only)
+`audit_log` records **every** D1 mutation: who, when, what, and which entity. It
+exists because live records changed twice during read-only sessions (4 events
+deleted, a business added) with no way to trace them. See `migrate-audit-log.sql`
+for the schema and the privacy contract.
+
+**It is not readable from any route.** No public endpoint, no Square, no owner
+dashboard — by design, and a test in `test/integration/audit-log.test.js` sweeps
+every read endpoint to keep it that way. **Do not add a read route.** Query it
+with wrangler:
+
+```bash
+# everything in the last 24h, newest first
+npx wrangler d1 execute townsquare --remote --command="SELECT ts, actor, action, entity_type, entity_id, summary FROM audit_log WHERE ts > datetime('now','-1 day') ORDER BY id DESC;"
+
+# every destructive action, ever
+npx wrangler d1 execute townsquare --remote --command="SELECT ts, actor, action, entity_id, summary FROM audit_log WHERE action LIKE '%delete%' OR action LIKE '%revoke%' ORDER BY id DESC;"
+
+# full history of one record (e.g. town_events id 482)
+npx wrangler d1 execute townsquare --remote --command="SELECT ts, actor, action, summary FROM audit_log WHERE entity_type='town_events' AND entity_id='482' ORDER BY id;"
+
+# everything one actor did ('admin', 'public', 'system', or a business slug)
+npx wrangler d1 execute townsquare --remote --command="SELECT ts, action, entity_type, entity_id, summary FROM audit_log WHERE actor='admin' ORDER BY id DESC LIMIT 50;"
+```
+
+Reading `actor`: a **business slug** = that tenant's session (the summary names the
+user id + role); `admin` = whoever holds the shared titusville-square PIN — it
+identifies the *role*, not the person, because that PIN is shared; `public` =
+unauthenticated visitor; `system` = worker-initiated (e.g. cross-product
+provisioning during signup).
+
+**Coverage starts 2026-07-18T17:25Z.** Anything before that is not in this table —
+use Cloudflare request logs or D1 time-travel for earlier incidents.
+
+`ip_hash` is a keyed HMAC of the client IP (secret `AUDIT_IP_SALT`), truncated to
+16 hex chars. **Do not rotate that secret** without accepting that hashes before
+and after stop correlating. A plain digest was rejected deliberately: IPv4 is only
+~4.3e9 values, so `sha256(ip)` is brute-forced back to the raw address in seconds.
+
+No retention policy exists yet — the table grows without bound. Not a concern at
+town scale, but decide a policy before it becomes a surprise rather than after.
