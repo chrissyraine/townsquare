@@ -947,7 +947,13 @@ async function buildPublicProjection(b) {
         const f = await r.json();
         if (f.announcement && f.announcement.text) live.announcement = f.announcement.text;
         if (f.hours) {
-          if (f.hours.status && f.hours.status !== 'open') live.hours_note = f.hours.note || f.hours.status;
+          // Only ever surface a REAL, owner-written note. Never fall back to the raw
+          // status enum: 'closed'/'unknown' are internal values, and publishing them
+          // rendered as "📣 closed" / "📣 unknown" announcements attributed to real
+          // institutions on the Town Board and in the Town Crier. The status itself is
+          // already carried structurally in live.hours_today below.
+          const note = typeof f.hours.note === 'string' ? f.hours.note.trim() : '';
+          if (note && f.hours.status !== 'open') live.hours_note = note;
           live.hours_today = {
             status: f.hours.status || null, open: f.hours.open_time || null, close: f.hours.close_time || null,
             is_24h: !!f.hours.is_24h, appointment_only: !!f.hours.appointment_only,
