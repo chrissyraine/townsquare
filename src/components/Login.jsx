@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 export default function Login({ onLogin }) {
-  const [slug, setSlug] = useState('titusville-mill');
+  const [slug, setSlug] = useState('');
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -52,7 +52,7 @@ export default function Login({ onLogin }) {
               className="input-field"
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
-              placeholder="e.g. titusville-mill"
+              placeholder="your-business-slug"
               required
             />
           </div>
