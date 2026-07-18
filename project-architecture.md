@@ -286,5 +286,49 @@ use Cloudflare request logs or D1 time-travel for earlier incidents.
 and after stop correlating. A plain digest was rejected deliberately: IPv4 is only
 ~4.3e9 values, so `sha256(ip)` is brute-forced back to the raw address in seconds.
 
-No retention policy exists yet — the table grows without bound. Not a concern at
-town scale, but decide a policy before it becomes a surprise rather than after.
+### Retention: indefinite (decided 2026-07-18)
+
+**Keep everything. No scheduled deletion, and no application code path that deletes
+from `audit_log`** — pruning, if it is ever warranted, is manual and deliberate.
+
+Sized against real numbers rather than instinct: the entire `townsquare` database
+(234 businesses, 84 events, all tables) was **232 KB** when this was decided.
+D1's ceiling is 10 GB. At the observed rate — roughly 30–60 rows/day, since
+`audit_log` covers ~2–3× the paths `activity_log` does — and ~500 bytes/row
+including its three indexes, that is **under 10 MB/year**. Storage is not the
+constraint and will not be for the foreseeable life of this project.
+
+Two reasons not to auto-prune, both stronger than the storage argument:
+
+1. **Incidents here are discovered late.** The events that motivated this table
+   were noticed well after the fact. Any retention window is a bet on detection
+   lag — set it to 90 days, notice in month five, and the evidence is gone exactly
+   when it is finally needed.
+2. **An audit log that deletes itself undermines its own purpose.** The point is
+   that destructive actions leave a trace; a scheduled job quietly destroying the
+   record of destruction is the last process that should run unattended, and there
+   is no volume pressure justifying the risk.
+
+The real constraint is **readability, not bytes** — in an incident, thousands of
+`auth.login` rows bury the one `event.delete`. That is a *query* problem, solved
+by the filters above (`WHERE action LIKE '%delete%'`). Filter noise at read time;
+never destroy data to make reading easier.
+
+**Review trigger:** revisit at ~1M rows, or if D1 storage becomes a genuine
+constraint — whichever comes first. If trimming is ever needed, trim the
+high-volume/low-value actions first (`auth.login`, `broker.*.mutate`) and **never**
+the destructive ones (`*.delete`, `*.revoke`, `team.role_change`,
+`business.create`).
+
+```bash
+# check the review trigger
+npx wrangler d1 execute townsquare --remote --command="SELECT COUNT(*) AS rows, MIN(ts) AS oldest FROM audit_log;"
+
+# what is actually driving volume, if it ever matters
+npx wrangler d1 execute townsquare --remote --command="SELECT action, COUNT(*) AS n FROM audit_log GROUP BY action ORDER BY n DESC;"
+```
+
+Watch `broker.*.mutate` — it fires on every non-GET request proxied to
+Herald/Drawbridge/Belltower/Hearth, so it is the one action likely to dominate the
+table if owners use their dashboards heavily. That makes it the first candidate to
+trim, not a reason to prune now.
