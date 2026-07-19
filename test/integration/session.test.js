@@ -119,3 +119,39 @@ describe('shared-credential auto-provision guard', () => {
     expect(data.role).toBe('OWNER');
   });
 });
+
+describe('disabled-login panels (pin_hash/salt = empty string)', () => {
+  // 2026-07-19: the DB-level fix for the 214 shared-placeholder-PIN
+  // directory panels — see C:\foreverstill\_backups\2026-07-19-panel-login-lockdown\.
+  // Stronger than the shared-credential guard above: that guard only
+  // blocks *auto-provisioning*, so a login attempt still gets to compare
+  // the submitted PIN against a real (shared) hash first. An empty
+  // pin_hash/salt closes the PIN-match step itself, for any input.
+  let env;
+  beforeEach(() => {
+    const { DB } = createTestD1();
+    env = { DB, SESSION_SECRET: SECRET };
+  });
+
+  async function seedDisabledBusiness(env, slug) {
+    const r = await env.DB.prepare("INSERT INTO businesses (slug, name, pin_hash, salt, modules) VALUES (?,?,'','','{}')")
+      .bind(slug, slug).run();
+    return r.meta.last_row_id;
+  }
+
+  it('rejects every PIN, including the historical shared placeholder', async () => {
+    await seedDisabledBusiness(env, 'quiet-panel');
+    for (const pin of ['4048', '1234', '0000', '', '9999']) {
+      const { status, data } = await call(worker, env, 'POST', '/api/auth/login', { body: { slug: 'quiet-panel', pin } });
+      expect(status).toBe(401);
+      expect(data.error).toBe('invalid_login');
+    }
+  });
+
+  it('never creates a users row, since the PIN check fails before auto-provisioning is even considered', async () => {
+    const id = await seedDisabledBusiness(env, 'quiet-panel-2');
+    await call(worker, env, 'POST', '/api/auth/login', { body: { slug: 'quiet-panel-2', pin: '4048' } });
+    const users = await env.DB.prepare('SELECT COUNT(*) as c FROM users WHERE business_id=?').bind(id).first();
+    expect(users.c).toBe(0);
+  });
+});
