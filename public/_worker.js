@@ -508,13 +508,51 @@ async function api(request, env, url) {
       ).all();
       return json({ submissions: subs.results || [], requests: reqs.results || [] });
     }
+    // Approving must actually PUBLISH the listing into the `businesses` registry — that
+    // registry (not this queue) is what the public directory reads. Un-approving pulls
+    // back out only the exact row we published, tracked via published_slug.
     if (act === 'sub-status' && b.id && /^(pending|approved|rejected)$/.test(b.status || '')) {
+      const sub = await env.DB.prepare('SELECT * FROM listing_submissions WHERE id=?').bind(b.id).first();
+      if (!sub) return json({ error: 'not_found' }, 404);
       await env.DB.prepare('UPDATE listing_submissions SET status=? WHERE id=?').bind(b.status, b.id).run();
+      const town = sub.town || 'titusville';
+      let published = null, unpublished = null;
+
+      if (b.status === 'approved') {
+        if (sub.published_slug) {
+          // Published before — just make it visible again.
+          await env.DB.prepare('UPDATE businesses SET is_public=1 WHERE slug=?').bind(sub.published_slug).run();
+          published = sub.published_slug;
+        } else {
+          const existing = await env.DB.prepare('SELECT slug FROM businesses WHERE town=? AND name=?').bind(town, sub.name).first();
+          if (existing) {
+            // Same name already in the registry (e.g. an existing panel) — adopt it, don't duplicate.
+            await env.DB.prepare('UPDATE businesses SET is_public=1 WHERE slug=?').bind(existing.slug).run();
+            published = existing.slug;
+          } else {
+            // New free listing lands as an unclaimed panel (modules {}) with a "Claim this listing" CTA.
+            const slug = await uniqueSlug(env, slugify(sub.name));
+            const salt = randomBytes(16).toString('hex');
+            const pin_hash = hashPin('4048', salt); // documented placeholder PIN for not-yet-claimed listings
+            await env.DB.prepare(
+              "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,category,blurb,address,phone,website,is_public) VALUES (?,?,?,?,?,'{}',?,?,?,?,?,1)"
+            ).bind(slug, sub.name, town, pin_hash, salt, sub.category, sub.description, sub.address, sub.phone, sub.website).run();
+            published = slug;
+          }
+          await env.DB.prepare('UPDATE listing_submissions SET published_slug=? WHERE id=?').bind(published, b.id).run();
+        }
+      } else if (sub.published_slug) {
+        // rejected / reset-to-pending: hide only the row we published.
+        await env.DB.prepare('UPDATE businesses SET is_public=0 WHERE slug=?').bind(sub.published_slug).run();
+        unpublished = sub.published_slug;
+      }
+
       await audit(env, request, {
         actor: 'admin', action: 'listing.submission_status', entity_type: 'listing_submissions', entity_id: b.id,
-        summary: `square admin set submission status to ${b.status}`,
+        summary: `square admin set submission status to ${b.status}`
+          + (published ? ` (published ${published})` : unpublished ? ` (unpublished ${unpublished})` : ''),
       });
-      return json({ ok: true });
+      return json({ ok: true, published, unpublished });
     }
     if (act === 'req-status' && b.id && /^(open|resolved)$/.test(b.status || '')) {
       await env.DB.prepare('UPDATE listing_requests SET status=? WHERE id=?').bind(b.status, b.id).run();
