@@ -9,6 +9,7 @@ export default function Landing({ onLogin }) {
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [notYetClaimedSlug, setNotYetClaimedSlug] = useState(null);
 
   // gain a solid nav background once scrolled
   useEffect(() => {
@@ -23,6 +24,7 @@ export default function Landing({ onLogin }) {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setNotYetClaimedSlug(null);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -33,7 +35,7 @@ export default function Landing({ onLogin }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (data.error === 'invalid_login') setError('Invalid slug or PIN. Please try again.');
-        else if (data.error === 'not_yet_claimed') setError("This business hasn't been claimed yet.");
+        else if (data.error === 'not_yet_claimed') { setError("This business hasn't been claimed yet."); setNotYetClaimedSlug(slug.trim()); }
         else setError(data.error || 'Login failed.');
       } else {
         onLogin({ slug: data.slug, name: data.name, town: data.town, modules: data.modules || {}, role: data.role || null, userId: data.userId || null });
@@ -134,7 +136,19 @@ export default function Landing({ onLogin }) {
               <input id="ts-slug" type="text" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="your-business" autoComplete="username" required />
               <label htmlFor="ts-pin">Access PIN</label>
               <input id="ts-pin" type="password" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="••••••" inputMode="numeric" autoComplete="current-password" required />
-              {error && <div className="tsl-err">{error}</div>}
+              {error && (
+                <div className="tsl-err">
+                  {error}
+                  {notYetClaimedSlug && (
+                    <>
+                      {' '}
+                      <a href={`https://titusvillesquare.com/claim-listing.html?slug=${encodeURIComponent(notYetClaimedSlug)}`} style={{ color: 'inherit', textDecoration: 'underline' }}>
+                        Claim it
+                      </a>
+                    </>
+                  )}
+                </div>
+              )}
               <button type="submit" className="tsl-btn tsl-btn--p tsl-form__submit" disabled={loading}>{loading ? 'Authenticating…' : 'Enter the hub'}</button>
             </form>
             <p className="tsl-form__note">New to TownSquare? <a href="mailto:chrissy@foreverstillstudio.com?subject=TownSquare%20%E2%80%94%20set%20me%20up">Ask Chrissy to set you up.</a></p>

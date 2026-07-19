@@ -3,11 +3,13 @@ import Landing from './components/Landing';
 import Dashboard from './components/Dashboard';
 import SparkleTrail from './components/SparkleTrail';
 import AcceptInvite from './components/AcceptInvite';
+import AcceptClaim from './components/AcceptClaim';
 
 export default function App() {
   const [session, setSession] = useState(null);
   const [checking, setChecking] = useState(true);
   const [inviteCode, setInviteCode] = useState(() => new URLSearchParams(window.location.search).get('invite'));
+  const [claimCode, setClaimCode] = useState(() => new URLSearchParams(window.location.search).get('claim'));
 
   // Restore session from the httpOnly cookie via the worker (no tokens in JS).
   useEffect(() => {
@@ -27,6 +29,11 @@ export default function App() {
 
   const clearInvite = () => {
     setInviteCode(null);
+    window.history.replaceState({}, '', window.location.pathname);
+  };
+
+  const clearClaim = () => {
+    setClaimCode(null);
     window.history.replaceState({}, '', window.location.pathname);
   };
 
@@ -50,6 +57,19 @@ export default function App() {
       <>
         <SparkleTrail />
         <AcceptInvite code={inviteCode} onAccepted={(data) => { setSession(data); clearInvite(); }} onCancel={clearInvite} />
+      </>
+    );
+  }
+
+  // Same priority reasoning as the invite branch above — a claim link is an
+  // explicit action that should never silently fall through to an unrelated
+  // existing session. No legitimate flow produces both ?invite= and ?claim=
+  // at once; invite is checked first, arbitrarily but deterministically.
+  if (claimCode) {
+    return (
+      <>
+        <SparkleTrail />
+        <AcceptClaim code={claimCode} onAccepted={(data) => { setSession(data); clearClaim(); }} onCancel={clearClaim} />
       </>
     );
   }

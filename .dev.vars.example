@@ -10,3 +10,11 @@ HERALD_SECRET="<Herald SESSION_SECRET>"
 DRAWBRIDGE_SECRET="<Drawbridge SESSION_SECRET>"
 BELLTOWER_SECRET="<Belltower SESSION_SECRET>"
 HEARTH_SECRET="<Hearth SESSION_SECRET>"
+
+# Listing-claim flow (Phase 2 Part B). Both optional in dev:
+# - Without RESEND_API_KEY, claim-start still queues the claim (sendEmail no-ops).
+# - OTP_DEV_ECHO=1 echoes the raw OTP code back in claim-start's JSON response so
+#   local/integration testing doesn't need a real inbox. NEVER set in production.
+RESEND_API_KEY=""
+EMAIL_DOMAIN="foreverstillstudio.com"
+OTP_DEV_ECHO="1"

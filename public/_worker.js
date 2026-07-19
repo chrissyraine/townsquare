@@ -91,7 +91,7 @@ async function api(request, env, url) {
       // reusing that SAME hash/salt — the PIN never changes for existing tenants.
       if (!verifyPin(pin, biz.salt, biz.pin_hash)) return json({ error: 'invalid_login' }, 401);
       let owner = await env.DB.prepare(
-        "SELECT id, role FROM users WHERE business_id=? AND role='OWNER' ORDER BY id LIMIT 1"
+        "SELECT id, role FROM users WHERE business_id=? AND role='OWNER' AND is_active=1 ORDER BY id LIMIT 1"
       ).bind(biz.id).first();
       if (!owner) {
         // Refuse to auto-provision on a credential shared across multiple businesses —
@@ -114,7 +114,7 @@ async function api(request, env, url) {
           "INSERT INTO users (business_id, name, pin_hash, salt, role) VALUES (?,?,?,?,'OWNER')"
         ).bind(biz.id, biz.name, biz.pin_hash, biz.salt).run();
         owner = await env.DB.prepare(
-          "SELECT id, role FROM users WHERE business_id=? AND role='OWNER' ORDER BY id LIMIT 1"
+          "SELECT id, role FROM users WHERE business_id=? AND role='OWNER' AND is_active=1 ORDER BY id LIMIT 1"
         ).bind(biz.id).first();
         await audit(env, request, {
           actor: biz.slug, action: 'user.autoprovision', entity_type: 'users', entity_id: owner && owner.id,
@@ -336,6 +336,119 @@ async function api(request, env, url) {
     return json({ ok: true });
   }
 
+  // ---- public: start a listing claim (honeypot + rate-limited + email OTP) ----
+  // A stranger claiming an existing business must NOT gain access just by knowing its
+  // public email/slug — this only proves inbox control and lands the claim in an admin
+  // review queue (/api/square/claims). Access is granted only on admin approval, via a
+  // separate accept_code minted at that point (see /api/claim/:code/accept below).
+  if (path === '/api/public/claim-start' && method === 'POST') {
+    const b = await readBody(request);
+    if (b && b.hp) return json({ ok: true }); // honeypot
+    const ip = clientIp(request);
+    if (!(await rateOk(env, ip, 'claim'))) return json({ error: 'rate_limited' }, 429);
+
+    const slug = String(b.business_slug || b.slug || '').trim();
+    const name = String(b.name || '').trim().slice(0, 120);
+    const email = String(b.email || '').trim().slice(0, 160);
+    const phone = String(b.phone || '').trim().slice(0, 40) || null;
+    const role = ['Owner', 'Manager', 'Employee', 'Other'].includes(b.role) ? b.role : null;
+    const message = String(b.message || '').trim().slice(0, 800) || null;
+
+    if (!slug) return json({ error: 'A business is required.' }, 400);
+    if (!name) return json({ error: 'Your name is required.' }, 400);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'A valid email is required.' }, 400);
+
+    const biz = await env.DB.prepare('SELECT id, name, claim_status FROM businesses WHERE slug=?').bind(slug).first();
+    if (!biz) return json({ error: 'business_not_found' }, 404);
+    if (biz.claim_status === 'claimed') return json({ error: 'already_claimed' }, 409);
+
+    const ABANDON_MS = 24 * 3600 * 1000;
+    const active = await env.DB.prepare(
+      `SELECT id, claimant_email, status, created_at FROM listing_claims
+       WHERE business_id=? AND status IN ('started','verification_required','pending_review','approved')
+       ORDER BY id DESC LIMIT 1`
+    ).bind(biz.id).first();
+
+    let claimId;
+    if (active) {
+      const sameEmail = active.claimant_email.toLowerCase() === email.toLowerCase();
+      const stillOpen = active.status === 'started' || active.status === 'verification_required';
+      const abandoned = stillOpen && (Date.now() - new Date(active.created_at).getTime()) > ABANDON_MS;
+
+      if (!sameEmail && !abandoned) {
+        return json({ error: 'claim_in_progress' }, 409);
+      }
+      if (sameEmail && !stillOpen && !abandoned) {
+        // Already verified/reviewed under this same email — nothing to (re)send.
+        return json({ ok: true, claim_id: active.id, status: active.status });
+      }
+      claimId = active.id;
+      await env.DB.prepare(
+        "UPDATE listing_claims SET claimant_name=?, claimant_email=?, claimant_phone=?, claimant_role=?, message=?, status='started' WHERE id=?"
+      ).bind(name, email, phone, role, message, claimId).run();
+    } else {
+      const ins = await env.DB.prepare(
+        'INSERT INTO listing_claims (business_id, claimant_name, claimant_email, claimant_phone, claimant_role, message, ip) VALUES (?,?,?,?,?,?,?)'
+      ).bind(biz.id, name, email, phone, role, message, ip).run();
+      claimId = ins.meta.last_row_id;
+    }
+
+    // Mint + send an OTP — best-effort; the claim row is saved and admin-visible
+    // regardless of whether the email actually sends (RESEND_API_KEY unconfigured, etc.).
+    const code = genOtpCode();
+    const code_hash = hashOtpCode(code, env.SESSION_SECRET);
+    const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    await env.DB.prepare(
+      'INSERT INTO claim_otp_codes (claim_id, email, code_hash, expires_at) VALUES (?,?,?,?)'
+    ).bind(claimId, email, code_hash, expires_at).run();
+
+    const sendResult = await sendEmail(env, email, 'Your Titusville Square verification code',
+      `<p>Your verification code for claiming <strong>${biz.name}</strong> on Titusville Square is:</p>
+       <p style="font-size:28px;font-weight:bold;letter-spacing:6px;">${code}</p>
+       <p>This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`);
+
+    await env.DB.prepare("UPDATE listing_claims SET status='verification_required' WHERE id=?").bind(claimId).run();
+    await audit(env, request, {
+      actor: 'public', action: 'claim.start', entity_type: 'listing_claims', entity_id: claimId,
+      summary: `claim started on business "${biz.name}"`,
+    });
+
+    const resp = { ok: true, claim_id: claimId, sent: !!sendResult.sent };
+    if (env.OTP_DEV_ECHO === '1') resp.dev_code = code; // dev-only escape hatch, mirrors Hearth's OTP_DEV_ECHO
+    return json(resp);
+  }
+
+  // ---- public: verify a claim's emailed OTP code ----
+  if (path === '/api/public/claim-verify' && method === 'POST') {
+    const b = await readBody(request);
+    const claimId = Number(b.claim_id);
+    const code = String(b.code || '').trim();
+    if (!claimId || !code) return json({ error: 'claim_id and code are required.' }, 400);
+
+    const claim = await env.DB.prepare('SELECT id, business_id, status FROM listing_claims WHERE id=?').bind(claimId).first();
+    if (!claim) return json({ error: 'invalid_claim' }, 404);
+    if (claim.status !== 'started' && claim.status !== 'verification_required') {
+      return json({ error: 'not_awaiting_verification', status: claim.status }, 409);
+    }
+
+    const result = await verifyOtpCode(env, claimId, code);
+    if (!result.ok) return json({ error: result.error }, result.error === 'too_many_attempts' ? 429 : 400);
+
+    await env.DB.prepare("UPDATE listing_claims SET status='pending_review', email_verified_at=datetime('now') WHERE id=?").bind(claimId).run();
+    const biz = await env.DB.prepare('SELECT id, name, claim_status FROM businesses WHERE id=?').bind(claim.business_id).first();
+    if (biz && biz.claim_status === 'unclaimed') {
+      await env.DB.prepare("UPDATE businesses SET claim_status='claim_pending' WHERE id=?").bind(biz.id).run();
+    }
+    await audit(env, request, {
+      actor: 'public', action: 'claim.verify', entity_type: 'listing_claims', entity_id: claimId,
+      summary: `email verified for claim on business "${biz ? biz.name : claim.business_id}"`,
+    });
+    await notify(env, `New listing claim: ${biz ? biz.name : claim.business_id}`,
+      `A claim on "${biz ? biz.name : claim.business_id}" has been email-verified and is awaiting review.\n\nReview: https://titusvillesquare.com/manage-events.html`);
+
+    return json({ ok: true, status: 'pending_review' });
+  }
+
   // ---- square admin: manage events (PIN = the titusville-square account) ----
   if (path === '/api/square/events' && method === 'POST') {
     const b = await readBody(request);
@@ -411,6 +524,114 @@ async function api(request, env, url) {
       });
       return json({ ok: true });
     }
+    return json({ error: 'bad_action' }, 400);
+  }
+
+  // ---- square admin: manage listing claims (PIN = the titusville-square account) ----
+  if (path === '/api/square/claims' && method === 'POST') {
+    const b = await readBody(request);
+    if (!(await squareOk(b && b.pin, env))) return json({ error: 'invalid_pin' }, 401);
+    const act = b.action;
+
+    if (act === 'list') {
+      const claims = await env.DB.prepare(
+        `SELECT lc.id, lc.business_id, biz.name as business_name, biz.slug as business_slug,
+                lc.claimant_name, lc.claimant_email, lc.claimant_phone, lc.claimant_role, lc.message,
+                lc.status, lc.email_verified_at, lc.reviewed_at, lc.reject_reason, lc.created_at
+         FROM listing_claims lc JOIN businesses biz ON biz.id = lc.business_id
+         ORDER BY (lc.status='pending_review') DESC, lc.created_at DESC LIMIT 200`
+      ).all();
+      return json({ claims: claims.results || [] });
+    }
+
+    if (act === 'approve' && b.id) {
+      const claim = await env.DB.prepare(
+        'SELECT id, business_id, status, claimant_name, claimant_email FROM listing_claims WHERE id=?'
+      ).bind(b.id).first();
+      if (!claim) return json({ error: 'not_found' }, 404);
+      if (claim.status !== 'pending_review') return json({ error: 'not_pending_review' }, 409);
+
+      const accept_code = randomBytes(16).toString('hex');
+      const expires_at = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+      await env.DB.prepare(
+        "UPDATE listing_claims SET status='approved', accept_code=?, accept_code_expires_at=?, reviewed_by='admin', reviewed_at=datetime('now') WHERE id=?"
+      ).bind(accept_code, expires_at, claim.id).run();
+
+      const biz = await env.DB.prepare('SELECT id, name FROM businesses WHERE id=?').bind(claim.business_id).first();
+      await sendEmail(env, claim.claimant_email, `You're approved — claim your ${biz ? biz.name : 'business'} listing`,
+        `<p>Hi ${claim.claimant_name},</p>
+         <p>Your claim on <strong>${biz ? biz.name : 'your business'}</strong> has been approved. Click below to
+         choose your PIN and access your dashboard:</p>
+         <p><a href="https://gettownsquare.app/?claim=${accept_code}">Claim your listing</a></p>
+         <p>This link expires in 7 days.</p>`);
+
+      await audit(env, request, {
+        actor: 'admin', action: 'claim.approve', entity_type: 'listing_claims', entity_id: claim.id,
+        summary: `square admin approved claim on business ${claim.business_id}`,
+      });
+      return json({ ok: true });
+    }
+
+    if (act === 'reject' && b.id) {
+      const claim = await env.DB.prepare('SELECT id, business_id, status FROM listing_claims WHERE id=?').bind(b.id).first();
+      if (!claim) return json({ error: 'not_found' }, 404);
+      const reason = String(b.reason || '').trim().slice(0, 300) || null;
+      await env.DB.prepare(
+        "UPDATE listing_claims SET status='rejected', reject_reason=?, reviewed_by='admin', reviewed_at=datetime('now') WHERE id=?"
+      ).bind(reason, claim.id).run();
+      // Free the business back up for a future claim, unless something else already
+      // claimed it in the meantime (shouldn't happen given the claim_in_progress guard
+      // at claim-start, but don't clobber a real claimed state if it somehow did).
+      const biz = await env.DB.prepare('SELECT id, claim_status FROM businesses WHERE id=?').bind(claim.business_id).first();
+      if (biz && biz.claim_status !== 'claimed') {
+        await env.DB.prepare("UPDATE businesses SET claim_status='unclaimed' WHERE id=?").bind(biz.id).run();
+      }
+      await audit(env, request, {
+        actor: 'admin', action: 'claim.reject', entity_type: 'listing_claims', entity_id: claim.id,
+        summary: `square admin rejected claim on business ${claim.business_id}`,
+      });
+      return json({ ok: true });
+    }
+
+    if (act === 'revoke' && b.id) {
+      const claim = await env.DB.prepare(
+        'SELECT id, business_id, status, accepted_user_id FROM listing_claims WHERE id=?'
+      ).bind(b.id).first();
+      if (!claim) return json({ error: 'not_found' }, 404);
+      await env.DB.prepare(
+        "UPDATE listing_claims SET status='revoked', accept_code=NULL, reviewed_by='admin', reviewed_at=datetime('now') WHERE id=?"
+      ).bind(claim.id).run();
+      await env.DB.prepare("UPDATE businesses SET claim_status='unclaimed' WHERE id=?").bind(claim.business_id).run();
+      // If the claim was already redeemed, deactivate the access it granted too —
+      // revoking a claim should actually revoke access, not just the paperwork. Also
+      // rotate businesses.pin_hash/salt to an unknown value: the legacy-fallback login
+      // path checks that hash directly (before ever looking at users.is_active), so
+      // leaving the redeemed PIN in place would let it back in via that path.
+      if (claim.accepted_user_id) {
+        await env.DB.prepare('UPDATE users SET is_active=0 WHERE id=?').bind(claim.accepted_user_id).run();
+        const revokedSalt = randomBytes(16).toString('hex');
+        const revokedHash = hashPin(randomBytes(32).toString('hex'), revokedSalt);
+        await env.DB.prepare('UPDATE businesses SET pin_hash=?, salt=? WHERE id=?')
+          .bind(revokedHash, revokedSalt, claim.business_id).run();
+      }
+      await audit(env, request, {
+        actor: 'admin', action: 'claim.revoke', entity_type: 'listing_claims', entity_id: claim.id,
+        summary: `square admin revoked claim on business ${claim.business_id}${claim.accepted_user_id ? ' (deactivated redeemed user)' : ''}`,
+      });
+      return json({ ok: true });
+    }
+
+    if (act === 'reset' && b.id) {
+      await env.DB.prepare(
+        "UPDATE listing_claims SET status='pending_review', reviewed_by=NULL, reviewed_at=NULL, reject_reason=NULL WHERE id=?"
+      ).bind(b.id).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'claim.reset', entity_type: 'listing_claims', entity_id: b.id,
+        summary: 'square admin reset claim to pending_review',
+      });
+      return json({ ok: true });
+    }
+
     return json({ error: 'bad_action' }, 400);
   }
 
@@ -872,6 +1093,69 @@ async function api(request, env, url) {
     return json({ ...projection, is_public: !!b.is_public });
   }
 
+  // ---- public: resolve an approved claim for the accept screen (no session yet) ----
+  if (path.match(/^\/api\/claim\/[^/]+$/) && method === 'GET') {
+    const code = path.split('/').pop();
+    const claim = await env.DB.prepare(
+      `SELECT lc.status, lc.accept_code_expires_at, b.name as business_name
+       FROM listing_claims lc JOIN businesses b ON b.id = lc.business_id
+       WHERE lc.accept_code=?`
+    ).bind(code).first();
+    if (!claim || claim.status !== 'approved' || new Date(claim.accept_code_expires_at) < new Date()) {
+      return json({ error: 'invalid_or_expired_claim' }, 404);
+    }
+    return json({ business_name: claim.business_name });
+  }
+
+  // ---- public: redeem an approved claim, choose a PIN (this IS the login) ----
+  if (path.match(/^\/api\/claim\/[^/]+\/accept$/) && method === 'POST') {
+    const code = path.split('/')[3]; // ['', 'api', 'claim', ':code', 'accept']
+    const b = await readBody(request);
+    const claim = await env.DB.prepare('SELECT * FROM listing_claims WHERE accept_code=?').bind(code).first();
+    if (!claim || claim.status !== 'approved' || new Date(claim.accept_code_expires_at) < new Date()) {
+      return json({ error: 'invalid_or_expired_claim' }, 404);
+    }
+    const pin = String(b.pin || '').trim();
+    if (!/^\d{4,8}$/.test(pin)) return json({ error: 'Choose a 4-8 digit PIN.' }, 400);
+
+    // Mint a brand-new random-salt credential and overwrite BOTH the business's own
+    // pin_hash/salt AND the new OWNER user row with it. Overwriting businesses.pin_hash
+    // matters, not just cosmetically: the legacy login fallback trusts ANY existing
+    // OWNER row once businesses.pin_hash matches the submitted PIN — it does not check
+    // that the submitted PIN belongs to that specific owner. Leaving the old shared
+    // placeholder hash in place would mean the old shared PIN still grants access via
+    // that fallback even after a real claim. This also self-heals the Part A guard's
+    // COUNT check toward 1 for this business.
+    const salt = randomBytes(16).toString('hex');
+    const pin_hash = hashPin(pin, salt);
+
+    await env.DB.prepare('UPDATE businesses SET pin_hash=?, salt=?, claim_status=?, claimed_at=datetime(\'now\') WHERE id=?')
+      .bind(pin_hash, salt, 'claimed', claim.business_id).run();
+    const ins = await env.DB.prepare(
+      "INSERT INTO users (business_id, name, pin_hash, salt, role) VALUES (?,?,?,?,'OWNER')"
+    ).bind(claim.business_id, claim.claimant_name, pin_hash, salt).run();
+    const newUserId = ins.meta.last_row_id;
+
+    await env.DB.prepare(
+      "UPDATE listing_claims SET status='completed', accepted_user_id=? WHERE id=?"
+    ).bind(newUserId, claim.id).run();
+
+    // This route SETS a PIN. The PIN, its hash, and its salt are never audited — only
+    // that a claim was redeemed and a new credentialed OWNER now exists.
+    await audit(env, request, {
+      actor: 'public', action: 'claim.accept', entity_type: 'users', entity_id: newUserId,
+      summary: `claim #${claim.id} redeemed — new OWNER user #${newUserId} created with a fresh PIN`,
+    });
+
+    const biz = await env.DB.prepare('SELECT slug, name, town, modules FROM businesses WHERE id=?').bind(claim.business_id).first();
+    const session = signClassic({ slug: biz.slug, exp: Date.now() + TTL_MS, uid: newUserId, role: 'OWNER' }, env.SESSION_SECRET);
+    return json(
+      { slug: biz.slug, name: biz.name, town: biz.town, modules: parse(biz.modules, {}), role: 'OWNER', userId: newUserId, token: session },
+      200,
+      { 'Set-Cookie': cookie('ts_session', session, TTL_MS / 1000) }
+    );
+  }
+
   // ---- broker + proxy: /api/m/:product/<product-path> ----
   const m = path.match(/^\/api\/m\/([^/]+)(\/.*)?$/);
   if (m) {
@@ -1228,6 +1512,56 @@ async function notify(env, subject, body) {
   } catch { /* best-effort — submission is already stored + visible in admin */ }
 }
 
+// ---- claim flow: outbound email to an arbitrary claimant --------------------
+// notify()/tsq-mailer above is a single-destination internal-alert pipe (Cloudflare's
+// send_email binding only supports one pre-verified recipient) and cannot email a
+// claimant. Resend can, and is already live in Belltower/Hearth for real customer
+// email — this mirrors that exact pattern. No-ops cleanly (never throws, never blocks
+// the caller) if RESEND_API_KEY isn't set, matching notify()'s degrade convention:
+// the claim row is still saved and visible to an admin even if the email never sends.
+async function sendEmail(env, to, subject, html) {
+  if (!env.RESEND_API_KEY || !to) return { sent: false, skipped: true };
+  const domain = env.EMAIL_DOMAIN || 'foreverstillstudio.com';
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: `TownSquare <claims@${domain}>`, to: [to], subject, html }),
+    });
+    return { sent: r.ok, status: r.status };
+  } catch (e) { return { sent: false, error: String(e) }; }
+}
+
+// ---- claim flow: OTP mechanics (mirrors Hearth's production otp_codes pattern) --
+// 6-digit numeric code, HMAC-hashed (never stores the raw code), 10-min expiry,
+// 5-attempt lock, single-use. Keyed by claim_id, not email — every query below is
+// scoped to one claim, so business isolation is structural, not a policy check.
+function genOtpCode() {
+  // 100000-999999, always 6 digits.
+  return String(100000 + Math.floor(Math.random() * 900000));
+}
+function hashOtpCode(code, secret) {
+  return createHmac('sha256', secret).update(String(code)).digest('hex');
+}
+async function verifyOtpCode(env, claimId, code) {
+  const row = await env.DB.prepare(
+    'SELECT id, code_hash, attempts, expires_at, used_at FROM claim_otp_codes WHERE claim_id=? ORDER BY id DESC LIMIT 1'
+  ).bind(claimId).first();
+  if (!row || row.used_at) return { ok: false, error: 'invalid_code' };
+  if (new Date(row.expires_at) < new Date()) return { ok: false, error: 'expired_code' };
+  if (row.attempts >= 5) return { ok: false, error: 'too_many_attempts' };
+
+  const submitted = Buffer.from(hashOtpCode(String(code || ''), env.SESSION_SECRET));
+  const stored = Buffer.from(row.code_hash);
+  const match = submitted.length === stored.length && timingSafeEqual(submitted, stored);
+  if (!match) {
+    await env.DB.prepare('UPDATE claim_otp_codes SET attempts=attempts+1 WHERE id=?').bind(row.id).run();
+    return { ok: false, error: 'wrong_code' };
+  }
+  await env.DB.prepare("UPDATE claim_otp_codes SET used_at=datetime('now') WHERE id=?").bind(row.id).run();
+  return { ok: true };
+}
+
 // ---- misc -----------------------------------------------------------------
 function cookie(name, val, maxAgeSec) {
   return `${name}=${encodeURIComponent(val)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSec}`;
@@ -1246,4 +1580,4 @@ function json(obj, status = 200, extra = {}) {
 }
 
 // ---- named exports for unit tests (alongside the default Pages export) ----
-export { hashPin, verifyPin, hashPinStatic, signClassic, verifyClassic, requireRole, ROLE_RANK };
+export { hashPin, verifyPin, hashPinStatic, signClassic, verifyClassic, requireRole, ROLE_RANK, genOtpCode, hashOtpCode };
