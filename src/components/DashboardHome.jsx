@@ -91,7 +91,7 @@ export default function DashboardHome({ business, onNavigate }) {
         </div>
       </section>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+      <div className="ts-dash-grid">
         {/* UPCOMING CONTENT */}
         <section className="glass-panel" style={{ padding: '24px' }}>
           <h3 style={{ fontSize: '1.2rem', marginBottom: '16px' }}>Upcoming events</h3>

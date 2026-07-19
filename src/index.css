@@ -267,13 +267,16 @@ h1, h2, h3, h4, h5, h6 {
 .ts-main__head { margin-bottom: 2.25rem; }
 .ts-main__head h2 { font-size: clamp(1.9rem, 3vw, 2.6rem); }
 
-/* Owner-facing events list — a fixed column count driven by viewport width
-   (not content-based auto-fill) so 3-across is reliable regardless of how
-   wide the sidebar + padding leave the content column. */
+/* Owner-facing events list, and the dashboard-home Upcoming events / Your
+   tools / Recent activity row — a fixed column count driven by viewport
+   width (not content-based auto-fill) so 3-across is reliable regardless
+   of how wide the sidebar + padding leave the content column. */
 .ts-events-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.ts-dash-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
 
 @media (max-width: 1080px) {
   .ts-events-grid { grid-template-columns: repeat(2, 1fr); }
+  .ts-dash-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 860px) {
@@ -283,4 +286,5 @@ h1, h2, h3, h4, h5, h6 {
   .ts-navitem { width: auto; }
   .ts-main { padding: 28px 22px; }
   .ts-events-grid { grid-template-columns: 1fr; }
+  .ts-dash-grid { grid-template-columns: 1fr; }
 }
