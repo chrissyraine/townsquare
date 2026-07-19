@@ -14,7 +14,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 // the added complexity of a full Workers-runtime test pool.
 // Migrations that must be layered on top of schema.sql for the test DB to match
 // what production actually has. Only additive, idempotent migrations belong here.
-const MIGRATIONS = ['migrate-audit-log.sql'];
+const MIGRATIONS = ['migrate-audit-log.sql', 'migrate-subscription.sql'];
 
 export function createTestD1() {
   const sqlite = new DatabaseSync(':memory:');

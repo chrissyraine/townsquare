@@ -29,3 +29,4 @@ seed*.sql
 *.njsproj
 *.sln
 *.sw?
+setpin-*.sql

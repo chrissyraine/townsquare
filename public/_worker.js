@@ -137,10 +137,19 @@ async function api(request, env, url) {
     });
 
     const session = signClassic({ slug: biz.slug, exp: Date.now() + TTL_MS, uid: user.id, role: user.role }, env.SESSION_SECRET);
+    // Login is the natural place to re-check a stale subscription (no webhooks in v1).
+    // Best-effort: never blocks or fails the login.
+    let bizAfter = biz;
+    try { bizAfter = await refreshSubscription(env, biz); } catch { /* keep stored status */ }
     // `token` lets a cross-origin owner UI (e.g. titusvillesquare.com/manage.html) authenticate
     // via Authorization: Bearer, since the httpOnly cookie can't ride cross-site.
     return json(
-      { slug: biz.slug, name: biz.name, town: biz.town, modules: parse(biz.modules, {}), role: user.role, userId: user.id, token: session },
+      {
+        slug: biz.slug, name: biz.name, town: biz.town, modules: parse(biz.modules, {}),
+        role: user.role, userId: user.id, token: session,
+        subscription_status: bizAfter.subscription_status || null,
+        subscription_active: subscriptionActive(bizAfter),
+      },
       200,
       { 'Set-Cookie': cookie('ts_session', session, TTL_MS / 1000) }
     );
@@ -154,7 +163,9 @@ async function api(request, env, url) {
   if (path === '/api/session' && method === 'GET') {
     const s = sessionFrom(request, env);
     if (!s) return json({ error: 'unauthenticated' }, 401);
-    const biz = await env.DB.prepare('SELECT slug,name,town,modules FROM businesses WHERE slug=?').bind(s.slug).first();
+    const biz = await env.DB.prepare(
+      'SELECT slug,name,town,modules,subscription_status FROM businesses WHERE slug=?'
+    ).bind(s.slug).first();
     if (!biz) return json({ error: 'unauthenticated' }, 401);
     let userName = null;
     if (s.uid) {
@@ -168,6 +179,8 @@ async function api(request, env, url) {
     return json({
       slug: biz.slug, name: biz.name, town: biz.town, modules: parse(biz.modules, {}),
       role: s.role || null, userId: s.uid || null, userName,
+      subscription_status: biz.subscription_status || null,
+      subscription_active: subscriptionActive(biz),
     });
   }
 
@@ -175,9 +188,17 @@ async function api(request, env, url) {
   if (path === '/api/public/directory' && method === 'GET') {
     const town = url.searchParams.get('town') || 'titusville';
     const rows = await env.DB.prepare(
-      'SELECT slug,name,category,blurb,address,phone,website,logo,primary_color,forge_url,modules FROM businesses WHERE town=? AND is_public=1 ORDER BY name'
+      'SELECT slug,name,category,blurb,address,phone,website,logo,primary_color,forge_url,modules,subscription_status FROM businesses WHERE town=? AND is_public=1 ORDER BY name'
     ).bind(town).all();
-    return json({ town, businesses: (rows.results || []).map((b) => ({ ...b, modules: parse(b.modules, {}) })) });
+    // The basic listing always publishes; only the paid `modules` map is withheld while
+    // inactive, so a lapsed business stays fully findable in the directory.
+    return json({
+      town,
+      businesses: (rows.results || []).map(({ subscription_status, ...b }) => ({
+        ...b,
+        modules: subscriptionActive({ subscription_status }) ? parse(b.modules, {}) : {},
+      })),
+    });
   }
   if (path === '/api/public/events' && method === 'GET') {
     const town = url.searchParams.get('town') || 'titusville';
@@ -252,8 +273,9 @@ async function api(request, env, url) {
 
     // 4) Create the hub account (public immediately).
     const insBiz = await env.DB.prepare(
-      "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,category,blurb,phone,website,email,subscription_id,created_via,is_public) VALUES (?,?,'titusville',?,?,?,?,?,?,?,?,?,'self-serve',1)"
-    ).bind(slug, name, hubHash, salt, modules, category, blurb, phone, website, email, subId).run();
+      "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,category,blurb,phone,website,email,subscription_id,subscription_status,subscription_plan_id,subscription_checked_at,created_via,is_public)"
+      + " VALUES (?,?,'titusville',?,?,?,?,?,?,?,?,?,'active',?,datetime('now'),'self-serve',1)"
+    ).bind(slug, name, hubHash, salt, modules, category, blurb, phone, website, email, subId, pp.plan_id || null).run();
     // Audits the slug + name (both already public in the directory) and the PayPal
     // subscription id — that last one is the traceability this log exists for: it
     // ties an account that appeared out of nowhere back to a real payment. It is an
@@ -393,7 +415,7 @@ async function api(request, env, url) {
     const ABANDON_MS = 24 * 3600 * 1000;
     const active = await env.DB.prepare(
       `SELECT id, claimant_email, status, created_at FROM listing_claims
-       WHERE business_id=? AND status IN ('started','verification_required','pending_review','approved')
+       WHERE business_id=? AND status IN ('started','verification_required','payment_required','pending_review','approved')
        ORDER BY id DESC LIMIT 1`
     ).bind(biz.id).first();
 
@@ -462,7 +484,9 @@ async function api(request, env, url) {
     const result = await verifyOtpCode(env, claimId, code);
     if (!result.ok) return json({ error: result.error }, result.error === 'too_many_attempts' ? 429 : 400);
 
-    await env.DB.prepare("UPDATE listing_claims SET status='pending_review', email_verified_at=datetime('now') WHERE id=?").bind(claimId).run();
+    // Email verified — but the claim now waits on payment before it reaches Chrissy's
+    // review queue. Admin review still happens AFTER payment; paying never approves.
+    await env.DB.prepare("UPDATE listing_claims SET status='payment_required', email_verified_at=datetime('now') WHERE id=?").bind(claimId).run();
     const biz = await env.DB.prepare('SELECT id, name, claim_status FROM businesses WHERE id=?').bind(claim.business_id).first();
     if (biz && biz.claim_status === 'unclaimed') {
       await env.DB.prepare("UPDATE businesses SET claim_status='claim_pending' WHERE id=?").bind(biz.id).run();
@@ -471,10 +495,88 @@ async function api(request, env, url) {
       actor: 'public', action: 'claim.verify', entity_type: 'listing_claims', entity_id: claimId,
       summary: `email verified for claim on business "${biz ? biz.name : claim.business_id}"`,
     });
-    await notify(env, `New listing claim: ${biz ? biz.name : claim.business_id}`,
-      `A claim on "${biz ? biz.name : claim.business_id}" has been email-verified and is awaiting review.\n\nReview: https://titusvillesquare.com/manage-events.html`);
+
+    return json({ ok: true, status: 'payment_required' });
+  }
+
+  // ---- public: claim payment — subscribe to Founding 50, then enter admin review ----
+  // Verifies the subscription SERVER-SIDE (a spoofed client onApprove proves nothing) and
+  // only moves the claim into the review queue. It deliberately grants NO listing access:
+  // ownership still requires admin approval + the accept-code step.
+  if (path === '/api/public/claim-pay' && method === 'POST') {
+    const b = await readBody(request);
+    const claimId = b && b.claim_id;
+    const subId = String((b && (b.subscriptionID || b.subscription_id)) || '').trim();
+    if (!claimId || !subId) return json({ error: 'claim_id and subscription are required.' }, 400);
+
+    const claim = await env.DB.prepare('SELECT id, business_id, status, claimant_email FROM listing_claims WHERE id=?').bind(claimId).first();
+    if (!claim) return json({ error: 'invalid_claim' }, 404);
+    // Idempotent: a double-submit on an already-paid claim returns success, not an error.
+    if (claim.status === 'pending_review') return json({ ok: true, status: 'pending_review', already: true });
+    if (claim.status !== 'payment_required') {
+      return json({ error: 'not_awaiting_payment', status: claim.status }, 409);
+    }
+
+    // One subscription can only ever back one business (mirrors /api/public/join).
+    const taken = await env.DB.prepare('SELECT slug FROM businesses WHERE subscription_id=?').bind(subId).first();
+    if (taken) return json({ error: 'subscription_already_used' }, 409);
+
+    const pp = await verifyPayPalSubscription(env, subId);
+    if (!pp.ok) return json({ error: 'payment_unverified', detail: pp.error, status: pp.status || null }, 402);
+    const allowed = String(env.PAYPAL_PLAN_IDS || 'P-6YJ33771Y6287535FNJDLG4I').split(',').map((s) => s.trim());
+    if (pp.plan_id && !allowed.includes(pp.plan_id)) return json({ error: 'plan_mismatch', plan: pp.plan_id }, 402);
+
+    // Attach the subscription to the business now so the owner has paid features the moment
+    // the claim is approved. Modules are NOT granted here — Chrissy enrolls those.
+    await env.DB.prepare(
+      "UPDATE businesses SET subscription_id=?, subscription_status='active', subscription_plan_id=?, subscription_checked_at=datetime('now') WHERE id=?"
+    ).bind(subId, pp.plan_id || null, claim.business_id).run();
+    await env.DB.prepare("UPDATE listing_claims SET status='pending_review' WHERE id=?").bind(claimId).run();
+
+    const biz = await env.DB.prepare('SELECT id, name FROM businesses WHERE id=?').bind(claim.business_id).first();
+    await audit(env, request, {
+      actor: 'public', action: 'claim.paid', entity_type: 'listing_claims', entity_id: claimId,
+      summary: `subscription ${subId} attached to "${biz ? biz.name : claim.business_id}"; claim awaiting ownership review`,
+    });
+    await notify(env, `New listing claim (PAID): ${biz ? biz.name : claim.business_id}`,
+      `A claim on "${biz ? biz.name : claim.business_id}" is email-verified AND paid, awaiting your ownership review.\n\n`
+      + `Claimant: ${claim.claimant_email}\nSubscription: ${subId}\n\nReview: https://titusvillesquare.com/manage-events.html`);
 
     return json({ ok: true, status: 'pending_review' });
+  }
+
+  // ---- owner: reactivate a lapsed subscription ----
+  // Deliberately NOT a re-claim: ownership was already verified once and is never revoked by a
+  // lapse, so this only flips paid features back on. No email loop, no admin review.
+  if (path === '/api/owner/reactivate' && method === 'POST') {
+    const s = sessionFrom(request, env);
+    if (!s) return json({ error: 'unauthenticated' }, 401);
+    const b = await readBody(request);
+    const subId = String((b && (b.subscriptionID || b.subscription_id)) || '').trim();
+    if (!subId) return json({ error: 'subscription is required.' }, 400);
+
+    const biz = await env.DB.prepare('SELECT id, name, subscription_id, subscription_status FROM businesses WHERE slug=?').bind(s.slug).first();
+    if (!biz) return json({ error: 'unauthenticated' }, 401);
+    if (subscriptionActive(biz)) return json({ ok: true, already_active: true, subscription_status: biz.subscription_status });
+
+    // Same uniqueness rule as join/claim-pay — except their OWN prior subscription id, which is
+    // theirs to reuse if PayPal reactivated it rather than issuing a new one.
+    const taken = await env.DB.prepare('SELECT id FROM businesses WHERE subscription_id=? AND id<>?').bind(subId, biz.id).first();
+    if (taken) return json({ error: 'subscription_already_used' }, 409);
+
+    const pp = await verifyPayPalSubscription(env, subId);
+    if (!pp.ok) return json({ error: 'payment_unverified', detail: pp.error, status: pp.status || null }, 402);
+    const allowedPlans = String(env.PAYPAL_PLAN_IDS || 'P-6YJ33771Y6287535FNJDLG4I').split(',').map((x) => x.trim());
+    if (pp.plan_id && !allowedPlans.includes(pp.plan_id)) return json({ error: 'plan_mismatch', plan: pp.plan_id }, 402);
+
+    await env.DB.prepare(
+      "UPDATE businesses SET subscription_id=?, subscription_status='active', subscription_plan_id=?, subscription_checked_at=datetime('now') WHERE id=?"
+    ).bind(subId, pp.plan_id || null, biz.id).run();
+    await audit(env, request, {
+      actor: 'owner', action: 'subscription.reactivate', entity_type: 'businesses', entity_id: biz.id,
+      summary: `"${biz.name}" reactivated with subscription ${subId} (was ${biz.subscription_status || 'none'})`,
+    });
+    return json({ ok: true, subscription_status: 'active' });
   }
 
   // ---- square admin: manage events (PIN = the titusville-square account) ----
@@ -619,7 +721,8 @@ async function api(request, env, url) {
       const claims = await env.DB.prepare(
         `SELECT lc.id, lc.business_id, biz.name as business_name, biz.slug as business_slug,
                 lc.claimant_name, lc.claimant_email, lc.claimant_phone, lc.claimant_role, lc.message,
-                lc.status, lc.email_verified_at, lc.reviewed_at, lc.reject_reason, lc.created_at
+                lc.status, lc.email_verified_at, lc.reviewed_at, lc.reject_reason, lc.created_at,
+                biz.subscription_status, biz.subscription_id, biz.subscription_checked_at
          FROM listing_claims lc JOIN businesses biz ON biz.id = lc.business_id
          ORDER BY (lc.status='pending_review') DESC, lc.created_at DESC LIMIT 200`
       ).all();
@@ -704,6 +807,14 @@ async function api(request, env, url) {
     }
 
     if (act === 'reset' && b.id) {
+      // Guarded: reset used to be a blind UPDATE, so it could resurrect a `completed`
+      // claim (one whose owner has already accepted and holds a PIN) back into the
+      // review queue — now carrying a stale subscription too. Only reopen dead claims.
+      const cur = await env.DB.prepare('SELECT status FROM listing_claims WHERE id=?').bind(b.id).first();
+      if (!cur) return json({ error: 'not_found' }, 404);
+      if (cur.status !== 'rejected' && cur.status !== 'revoked') {
+        return json({ error: 'not_resettable', status: cur.status }, 409);
+      }
       await env.DB.prepare(
         "UPDATE listing_claims SET status='pending_review', reviewed_by=NULL, reviewed_at=NULL, reject_reason=NULL WHERE id=?"
       ).bind(b.id).run();
@@ -724,6 +835,7 @@ async function api(request, env, url) {
     const town = url.searchParams.get('town') || 'titusville';
     const rows = await env.DB.prepare(
       `SELECT slug,name,category,blurb,website,logo,primary_color,forge_url,product_slugs,modules,
+              subscription_status,
               full_description,secondary_categories,address,service_area,phone,email,
               public_contact_preference,social_links,price_range,accessibility_info,parking_info,
               family_friendly,pet_friendly,appointment_required,service_notes
@@ -1165,6 +1277,7 @@ async function api(request, env, url) {
     if (!ctx) return json({ error: 'forbidden' }, 403);
     const b = await env.DB.prepare(
       `SELECT slug,name,category,blurb,website,logo,primary_color,forge_url,product_slugs,modules,is_public,
+              subscription_status,
               full_description,secondary_categories,address,service_area,phone,email,
               public_contact_preference,social_links,price_range,accessibility_info,parking_info,
               family_friendly,pet_friendly,appointment_required,service_notes
@@ -1249,9 +1362,23 @@ async function api(request, env, url) {
     const s = sessionFrom(request, env);
     if (!s) return json({ module: key, ok: false, error: 'unauthenticated' }, 401);
 
-    const biz = await env.DB.prepare('SELECT slug,modules,product_slugs FROM businesses WHERE slug=?').bind(s.slug).first();
+    const biz = await env.DB.prepare(
+      'SELECT slug,modules,product_slugs,subscription_status FROM businesses WHERE slug=?'
+    ).bind(s.slug).first();
     if (!biz) return json({ module: key, ok: false, error: 'unauthenticated' }, 401);
     if (!parse(biz.modules, {})[key]) return json({ module: key, ok: false, error: 'not_enrolled' }, 403);
+    // A lapsed subscription is READ-ONLY, not revoked: GET/HEAD still reach the product so
+    // the owner can see everything they wrote. Only writes are refused, with 402 (distinct
+    // from not_enrolled so the dashboard can tell "lapsed" from "never subscribed").
+    const isRead = request.method === 'GET' || request.method === 'HEAD';
+    if (!isRead && !subscriptionActive(biz)) {
+      return json({
+        module: key,
+        ok: false,
+        error: 'subscription_inactive',
+        subscription_status: biz.subscription_status || null,
+      }, 402);
+    }
 
     const pslug = parse(biz.product_slugs, {})[key] || biz.slug;
     const secret = env[product.secret];
@@ -1308,7 +1435,14 @@ async function api(request, env, url) {
 // (/api/business/preview) so the preview can never drift from what's actually
 // shown publicly — one code path, not two copies that could disagree.
 async function buildPublicProjection(b) {
-  const modules = parse(b.modules, {});
+  const enrolled = parse(b.modules, {});
+  // Paid features are gated on an active subscription. A lapse must NEVER delete
+  // anything — we simply stop PUBLISHING the paid signals. `businesses.modules` and the
+  // owner's content in Herald/Drawbridge stay untouched, and everything reappears the
+  // moment the subscription is active again. Treating the whole map as empty gates the
+  // signal fetches, the links map, and the modules echo in one place.
+  const paidActive = subscriptionActive(b);
+  const modules = paidActive ? enrolled : {};
   const pslugs = parse(b.product_slugs, {});
   const live = {};
 
@@ -1563,6 +1697,47 @@ async function verifyPayPalSubscription(env, subId) {
   if (!sub || !sub.id) return { ok: false, error: 'subscription_not_found' };
   if (sub.status !== 'ACTIVE' && sub.status !== 'APPROVED') return { ok: false, error: 'subscription_not_active', status: sub.status };
   return { ok: true, plan_id: sub.plan_id || null, status: sub.status, subscriber: sub.subscriber || null };
+}
+
+// ---- subscription gating -----------------------------------------------------
+// SINGLE source of truth for "may this business use paid features?". Every gate
+// (publishing, broker writes, dashboard) must call this and nothing else.
+//
+//   comped        - community orgs + Chrissy's own listings; free forever.
+//   grandfathered - existed before subscriptions were enforced; never regressed.
+//   active        - a PayPal subscription verified ACTIVE.
+// Anything else (cancelled/suspended/past_due, or NULL on a row created after the
+// migration) is inactive. Inactive means READ-ONLY — never deletion.
+function subscriptionActive(biz) {
+  if (!biz) return false;
+  const s = biz.subscription_status;
+  return s === 'comped' || s === 'grandfathered' || s === 'active';
+}
+// Statuses PayPal owns. Comped/grandfathered are ours and must never be overwritten
+// by a PayPal re-check, or a lapsed card would silently dark a comped community org.
+function subscriptionIsPayPalManaged(biz) {
+  const s = biz && biz.subscription_status;
+  return s !== 'comped' && s !== 'grandfathered';
+}
+// Re-check a PayPal-managed subscription and persist the result. Best-effort: on any
+// PayPal/network failure we KEEP the stored status rather than downgrading, so an
+// outage can never lock a paying owner out of their own dashboard.
+async function refreshSubscription(env, biz, { maxAgeMs = 24 * 3600 * 1000 } = {}) {
+  if (!biz || !subscriptionIsPayPalManaged(biz) || !biz.subscription_id) return biz;
+  const last = biz.subscription_checked_at ? Date.parse(biz.subscription_checked_at + 'Z') : 0;
+  if (last && Date.now() - last < maxAgeMs) return biz;
+  const pp = await verifyPayPalSubscription(env, biz.subscription_id);
+  let next = biz.subscription_status;
+  if (pp.ok) next = 'active';
+  else if (pp.error === 'subscription_not_active') {
+    next = { CANCELLED: 'cancelled', SUSPENDED: 'suspended', EXPIRED: 'cancelled' }[pp.status] || 'past_due';
+  } else return biz; // unconfigured / auth failure / network — do not downgrade
+  try {
+    await env.DB.prepare(
+      "UPDATE businesses SET subscription_status=?, subscription_checked_at=datetime('now') WHERE id=?"
+    ).bind(next, biz.id).run();
+  } catch { /* best-effort */ }
+  return { ...biz, subscription_status: next };
 }
 
 // ---- listing-form helpers (rate limit + best-effort email) --------------------

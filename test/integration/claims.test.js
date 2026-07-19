@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Buffer } from 'node:buffer';
 import worker from '../../public/_worker.js';
 import { hashPin } from '../../public/_worker.js';
 import { createTestD1 } from '../test-utils/d1.js';
 import { call } from '../test-utils/worker.js';
+import { paypalEnv, stubPayPal, restorePayPal } from '../test-utils/paypal.js';
 
 const SECRET = 'test-secret';
 
@@ -17,6 +18,9 @@ async function seedBusiness(env, slug, pin = '4048', shared = true) {
   return r.meta.last_row_id;
 }
 
+// start -> verify -> PAY. A claim only reaches the admin review queue after the
+// Founding 50 subscription is verified server-side, so every test that needs a
+// reviewable claim must now go through payment too.
 async function startAndVerify(env, slug, email = 'claimant@example.com', name = 'Casey Claimant') {
   const start = await call(worker, env, 'POST', '/api/public/claim-start', {
     body: { business_slug: slug, name, email, role: 'Owner' },
@@ -25,24 +29,32 @@ async function startAndVerify(env, slug, email = 'claimant@example.com', name = 
   const verify = await call(worker, env, 'POST', '/api/public/claim-verify', {
     body: { claim_id: start.data.claim_id, code: start.data.dev_code },
   });
-  return { start, verify };
+  const pay = await call(worker, env, 'POST', '/api/public/claim-pay', {
+    body: { claim_id: start.data.claim_id, subscriptionID: `I-SUB-${slug}` },
+  });
+  return { start, verify, pay };
 }
 
 describe('listing claim flow', () => {
   let env;
   beforeEach(() => {
     const { DB } = createTestD1();
-    env = { DB, SESSION_SECRET: SECRET, OTP_DEV_ECHO: '1' };
+    env = { DB, SESSION_SECRET: SECRET, OTP_DEV_ECHO: '1', ...paypalEnv() };
+    stubPayPal();
   });
+  afterEach(() => restorePayPal());
 
   it('happy path: start -> verify -> admin approve -> accept -> new PIN logs in as OWNER, old shared PIN no longer works', async () => {
     await seedBusiness(env, 'panel-a', '4048');
     // A second business sharing the same placeholder hash, to prove self-healing later.
     await seedBusiness(env, 'panel-b', '4048');
 
-    const { start, verify } = await startAndVerify(env, 'panel-a');
+    const { start, verify, pay } = await startAndVerify(env, 'panel-a');
     expect(verify.status).toBe(200);
-    expect(verify.data.status).toBe('pending_review');
+    // Email verification alone no longer reaches review — payment comes first.
+    expect(verify.data.status).toBe('payment_required');
+    expect(pay.status).toBe(200);
+    expect(pay.data.status).toBe('pending_review');
 
     const list = await call(worker, env, 'POST', '/api/square/claims', { body: { pin: '4048', action: 'list' } });
     // NOTE: squareOk checks against a business literally slugged 'titusville-square' which
