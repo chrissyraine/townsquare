@@ -74,7 +74,12 @@ async function api(request, env, url) {
   // that has no `users` rows yet (hasn't logged in since this shipped).
   if (path === '/api/auth/login' && method === 'POST') {
     const { slug, pin } = await readBody(request);
-    const biz = await env.DB.prepare('SELECT * FROM businesses WHERE slug=?').bind(slug).first();
+    // Accept the Business ID *or* the email on file. Owners reliably remember their
+    // email; a slug they saw once on a signup screen they do not. PIN check unchanged.
+    const ident = String(slug || '').trim();
+    const biz = await env.DB.prepare(
+      'SELECT * FROM businesses WHERE slug=? OR (email IS NOT NULL AND lower(email)=lower(?)) LIMIT 1'
+    ).bind(ident, ident).first();
     if (!biz) return json({ error: 'invalid_login' }, 401);
 
     const members = await env.DB.prepare(
@@ -269,6 +274,18 @@ async function api(request, env, url) {
       await env.DRAWBRIDGE_DB.prepare('INSERT OR IGNORE INTO restaurants (slug,name,pin_hash,is_open) VALUES (?,?,?,1)').bind(slug, name, prodHash).run();
       await audit(env, request, { actor: 'system', action: 'business.provision', entity_type: 'drawbridge.restaurants', entity_id: slug, summary: `provisioned Drawbridge account for ${slug}` });
     } catch (e) { warn.push('drawbridge:' + String(e)); }
+
+    // A paying signup previously notified nobody — Chrissy only saw PayPal's receipt, and
+    // the owner saw their Business ID once on the success screen. Send her the record so
+    // there's always a way to tell an owner their login. (Cloudflare Email Workers can only
+    // send to verified destinations, so we can't email the owner directly.)
+    await notify(env, `New Founding 50 signup: ${name}`,
+      `${name}${category ? ' (' + category + ')' : ''}\n\n` +
+      `Business ID (their login): ${slug}\n` +
+      `Email: ${email || '-'}\nPhone: ${phone || '-'}\nWebsite: ${website || '-'}\n` +
+      `PayPal subscription: ${subId}\n\n` +
+      `They chose their own PIN at signup. They can sign in with this Business ID OR their\n` +
+      `email at https://titusvillesquare.com/manage`);
 
     return json({ ok: true, slug, warn: warn.length ? warn : undefined });
   }
