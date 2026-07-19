@@ -475,7 +475,9 @@ async function api(request, env, url) {
     const code = String(b.code || '').trim();
     if (!claimId || !code) return json({ error: 'claim_id and code are required.' }, 400);
 
-    const claim = await env.DB.prepare('SELECT id, business_id, status FROM listing_claims WHERE id=?').bind(claimId).first();
+    const claim = await env.DB.prepare(
+      'SELECT id, business_id, status, claimant_name, claimant_email FROM listing_claims WHERE id=?'
+    ).bind(claimId).first();
     if (!claim) return json({ error: 'invalid_claim' }, 404);
     if (claim.status !== 'started' && claim.status !== 'verification_required') {
       return json({ error: 'not_awaiting_verification', status: claim.status }, 409);
@@ -495,6 +497,16 @@ async function api(request, env, url) {
       actor: 'public', action: 'claim.verify', entity_type: 'listing_claims', entity_id: claimId,
       summary: `email verified for claim on business "${biz ? biz.name : claim.business_id}"`,
     });
+    // Alert on VERIFY, not just on payment. Someone who verifies and then stalls at the
+    // pay step is a real person who tried and is worth following up with — and if the
+    // notification only fired on payment, that person would be invisible. (Which is
+    // exactly what happened to the first real claimant.)
+    await notify(env, `Listing claim started (unpaid): ${biz ? biz.name : claim.business_id}`,
+      `${claim.claimant_name || 'Someone'} verified their email for "${biz ? biz.name : claim.business_id}" `
+      + `and is now at the payment step.\n\nClaimant: ${claim.claimant_email}\n\n`
+      + `NOTHING IS OWED TO YOU YET and there is nothing to approve — this is only a heads-up that\n`
+      + `someone is mid-claim. You'll get a second email if and when they subscribe.\n`
+      + `If they go quiet, that's a good one to follow up on: https://titusvillesquare.com/manage-events.html`);
 
     return json({ ok: true, status: 'payment_required' });
   }

@@ -26,9 +26,14 @@ export function stubPayPal({
   authOk = true,
 } = {}) {
   const calls = [];
-  vi.stubGlobal('fetch', vi.fn(async (url) => {
+  // `requests` also captures POST bodies. Asserting on a URL alone is not enough when
+  // several different emails share one outbound pipe — the OTP send and the admin alert
+  // both POST to MAILER_URL, so a URL-only assertion passes even when the alert is gone.
+  const requests = [];
+  vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     const u = String(url);
     calls.push(u);
+    requests.push({ url: u, body: init && typeof init.body === 'string' ? init.body : '' });
     if (u.includes('/v1/oauth2/token')) {
       return new Response(JSON.stringify(authOk ? { access_token: 'test-token' } : { error: 'invalid_client' }),
         { status: authOk ? 200 : 401 });
@@ -40,7 +45,7 @@ export function stubPayPal({
     // Any other outbound call (Resend, product feeds) resolves harmlessly.
     return new Response('{}', { status: 200 });
   }));
-  return { calls };
+  return { calls, requests };
 }
 
 export function restorePayPal() {

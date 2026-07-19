@@ -259,4 +259,28 @@ describe('listing claim flow', () => {
     });
     expect(JSON.stringify(verify.data)).not.toMatch(/code_hash|accept_code/);
   });
+
+  // Regression: the pay step was added between verify and review, and the alert moved with
+  // it — so a claimant who verified and then stalled at payment was completely invisible.
+  // That is exactly how the first real claim was missed. Alert on verify, not just on pay.
+  it('alerts Chrissy as soon as the email is verified, BEFORE any payment', async () => {
+    await seedBusiness(env, 'panel-notify', '4048');
+    const mailerEnv = { ...env, MAILER_URL: 'https://mailer.invalid/send', MAILER_SECRET: 'm-secret' };
+    const { requests } = stubPayPal();
+
+    const start = await call(worker, mailerEnv, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-notify', name: 'Patrick', email: 'patrick@example.com', role: 'Owner' },
+    });
+    await call(worker, mailerEnv, 'POST', '/api/public/claim-verify', {
+      body: { claim_id: start.data.claim_id, code: start.data.dev_code },
+    });
+
+    // No payment has happened yet — the alert must already have gone out.
+    // Assert on the ALERT itself, not merely that the mailer pipe was touched — the OTP
+    // email also POSTs there, and matched a URL-only assertion even with the alert removed.
+    const alert = requests.find((r) => r.body.includes('Listing claim started (unpaid)'));
+    expect(alert, 'no unpaid-claim alert was sent').toBeTruthy();
+    expect(alert.body).toContain('patrick@example.com');
+  });
+
 });

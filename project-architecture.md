@@ -1,6 +1,6 @@
 # TownSquare — Ecosystem Architecture
 
-_Last updated: 2026-07-18 · Owner: Chrissy · Maintained by Claude Code_
+_Last updated: 2026-07-19 · Owner: Chrissy · Maintained by Claude Code_
 
 This is the source-of-truth context doc for connecting the Forever Still Studio
 ecosystem under **TownSquare**. Read this before touching code in any session.
@@ -224,10 +224,16 @@ isn't reflected in it, so it gets its own entry:
 - **Hearth custom domain** `getthehearth.app` + admin PIN still pending (per memory).
 - **Token TTLs differ per product** (e.g. Hearth hall = 12h, Belltower belfry,
   Drawbridge keep) — broker must honor each product's TTL semantics.
-- **Shared placeholder PIN** (216 seeded PANEL businesses) — largely resolved by
-  the listing claim flow (§6a), which self-heals each business's credential the
-  moment it's claimed. The Part A guard in `/api/auth/login` still blocks
-  auto-provisioning for any business that hasn't been claimed yet.
+- **Shared placeholder PIN** (was: 216 seeded PANEL businesses on one credential) —
+  **resolved at the data layer 2026-07-19**, not just guarded at runtime. The shared
+  `pin_hash`/`salt` was cleared to empty strings on the 214 bare-directory panels and
+  on the Titusville Mill (id 4771), so `verifyPin()`'s empty-hash short-circuit makes
+  login structurally impossible on those rows — the one shared PIN no longer opens any
+  of them. **Prod now: 237 businesses, 215 login-disabled, 22 with real credentials.**
+  The Part A auto-provisioning guard in `/api/auth/login` and the listing-claim flow
+  (§6a) remain as defense-in-depth for any future re-seed or newly-added tenant. See
+  the data-operations record under §8. `seed-directory.sql` was also rewritten
+  (`INSERT ... ON CONFLICT`) so a re-seed can't reintroduce the shared credential.
 
 ---
 
@@ -276,6 +282,16 @@ list IS the record of what prod has. All are applied to the remote `townsquare` 
 Every migration must be **additive** (`CREATE ... IF NOT EXISTS` / `ALTER TABLE
 ADD COLUMN`). Never `DROP` or overwrite an existing table. Run `--local` first,
 then `--remote` after review.
+
+### Data operations (run by hand — changed prod *data*, not schema)
+These live in `_backups/` rather than the `migrate-*.sql` set because they mutate
+rows, not structure — but they're recorded here since this list is the record of
+what prod has. Each has a captured, tested ROLLBACK beside its APPLY.
+
+| Operation | Effect on prod | Applied | Backup + rollback |
+| :-- | :-- | :-- | :-- |
+| Panel login lockdown | 214 seeded bare-directory PANEL businesses set to `pin_hash=''`/`salt=''` — the shared placeholder PIN can no longer authenticate as any of them | ✅ 2026-07-19 | `_backups/2026-07-19-panel-login-lockdown/` |
+| Titusville Mill eradication | id 4771 reduced to a name-only public listing (`category`/`blurb`/`address`/`secondary_categories`/`social_links`/`service_notes` NULLed), login disabled (`pin_hash=''`/`salt=''`), auto-provisioned OWNER `users` id 2 deleted. Row stays `is_public=1`, `modules='{}'` — a bare directory tile | ✅ 2026-07-19 | `_backups/2026-07-18-mill-eradication/ROLLBACK-townsquare.sql` |
 
 ---
 
