@@ -1,6 +1,6 @@
 # TownSquare — Ecosystem Architecture
 
-_Last updated: 2026-06-23 · Owner: Chrissy · Maintained by Claude Code_
+_Last updated: 2026-07-18 · Owner: Chrissy · Maintained by Claude Code_
 
 This is the source-of-truth context doc for connecting the Forever Still Studio
 ecosystem under **TownSquare**. Read this before touching code in any session.
@@ -182,12 +182,38 @@ auto-populates the town directory → free local discovery/foot traffic.
 
 - **Phase 1 — Foundation:** TownSquare backend (worker + D1 + registry), token
   broker, proxy, TownSquare-session login, module-enrollment + upsell. _No edits to
-  the four live products._
-- **Phase 2 — Hearth module:** wire the 5th module UI through the proxy.
+  the four live products._ ✅ done.
+- **Phase 2 — Hearth module:** wire the 5th module UI through the proxy. ✅ done.
 - **Phase 3 — Community app:** public projection endpoints + `town_events` + the
-  `titusvillesquare.com` frontend.
+  `titusvillesquare.com` frontend. ✅ done.
 - **Phase 4 — Onboarding/provisioning:** admin to enroll businesses, "Add this
-  module" write-side (creates the row in the target product's D1).
+  module" write-side (creates the row in the target product's D1). Partial —
+  self-serve enrollment isn't built; businesses currently onboard via the listing
+  claim flow (§6a) or manual `/api/square/listings` admin actions.
+
+### 6a. Owner dashboard + listing claims (shipped 2026-07-18)
+A full owner-facing dashboard was built on top of the Phase 1-3 foundation —
+this is the biggest single addition since the original phased plan above and
+isn't reflected in it, so it gets its own entry:
+- **Dashboard:** roles (OWNER/MANAGER/STAFF), dashboard home, business profile,
+  hours, events (owner CRUD, 3-column grid), team/invites, public preview,
+  activity log. Components: `DashboardHome.jsx`, `BusinessProfileEditor.jsx`,
+  `HoursManager.jsx`, `EventsManager.jsx`, `TeamManager.jsx`, `PublicPreview.jsx`.
+- **Security fix:** the legacy login flow auto-provisioned a full OWNER account to
+  anyone who knew a business's PIN — including a placeholder PIN shared across
+  216 seeded "PANEL" listings. Closed with a self-defending guard (refuses to
+  auto-provision on a credential shared across multiple businesses) plus a full
+  listing-claim flow (below) that replaces the shared PIN for real.
+- **Listing claims:** public self-serve claim form (email OTP verify → admin
+  review → approve/reject → accept-code redemption mints a fresh PIN). Tables:
+  `listing_claims`, `claim_otp_codes`; `businesses.claim_status`. Public entry
+  point: `titusvillesquare.com/claim-listing.html`. Admin review queue: the
+  "Listing claims" section of `manage-events.html` (defaults to hiding
+  approved/rejected claims — toggle "Show approved/rejected" to see them).
+  Claiming a business **self-heals** the shared-PIN problem: `claim-accept`
+  always mints a brand-new random-salt PIN, so the placeholder-PIN business
+  count shrinks toward zero as real owners claim their listings — no bulk
+  migration needed.
 
 ---
 
@@ -198,6 +224,10 @@ auto-populates the town directory → free local discovery/foot traffic.
 - **Hearth custom domain** `getthehearth.app` + admin PIN still pending (per memory).
 - **Token TTLs differ per product** (e.g. Hearth hall = 12h, Belltower belfry,
   Drawbridge keep) — broker must honor each product's TTL semantics.
+- **Shared placeholder PIN** (216 seeded PANEL businesses) — largely resolved by
+  the listing claim flow (§6a), which self-heals each business's credential the
+  moment it's claimed. The Part A guard in `/api/auth/login` still blocks
+  auto-provisioning for any business that hasn't been claimed yet.
 
 ---
 
