@@ -283,4 +283,69 @@ describe('listing claim flow', () => {
     expect(alert.body).toContain('patrick@example.com');
   });
 
+
+  // The grandfathering gap: ~225 pre-existing listings are 'grandfathered', which reads as
+  // 'entitled to paid features'. That courtesy was for operators already running a panel, NOT
+  // for a stranger who claims one of those listings later. Approval must therefore check the
+  // MONEY, independently of the claim's status field.
+  it('refuses to approve a claim on a grandfathered listing that has not paid', async () => {
+    const adminSalt = 'bb'.repeat(16);
+    await env.DB.prepare('INSERT INTO businesses (slug, name, pin_hash, salt) VALUES (?,?,?,?)')
+      .bind('titusville-square', 'titusville-square', hashPin('0777', adminSalt), adminSalt).run();
+    await seedBusiness(env, 'panel-gf', '4048');
+    await env.DB.prepare("UPDATE businesses SET subscription_status='grandfathered' WHERE slug=?").bind('panel-gf').run();
+    const start = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-gf', name: 'Opportunist', email: 'freebie@example.com', role: 'Owner' },
+    });
+    await call(worker, env, 'POST', '/api/public/claim-verify', {
+      body: { claim_id: start.data.claim_id, code: start.data.dev_code },
+    });
+    // Force the claim to the reviewable state WITHOUT paying — the exact state a bug in the
+    // pay step (or a hand-edited row) could produce.
+    await env.DB.prepare("UPDATE listing_claims SET status='pending_review' WHERE id=?").bind(start.data.claim_id).run();
+
+    const approve = await call(worker, env, 'POST', '/api/square/claims', {
+      body: { pin: '0777', action: 'approve', id: start.data.claim_id },
+    });
+    expect(approve.status).toBe(402);
+    expect(approve.data.error).toBe('subscription_required');
+    expect(approve.data.subscription_status).toBe('grandfathered');
+
+    // And no accept code was minted, so there is nothing to redeem.
+    const row = await env.DB.prepare('SELECT status, accept_code FROM listing_claims WHERE id=?').bind(start.data.claim_id).first();
+    expect(row.status).toBe('pending_review');
+    expect(row.accept_code).toBeFalsy();
+  });
+
+  it('approves a claim once the subscription is genuinely active', async () => {
+    const adminSalt = 'bb'.repeat(16);
+    await env.DB.prepare('INSERT INTO businesses (slug, name, pin_hash, salt) VALUES (?,?,?,?)')
+      .bind('titusville-square', 'titusville-square', hashPin('0777', adminSalt), adminSalt).run();
+    await seedBusiness(env, 'panel-paid', '4048');
+    const { start } = await startAndVerify(env, 'panel-paid');
+    const approve = await call(worker, env, 'POST', '/api/square/claims', {
+      body: { pin: '0777', action: 'approve', id: start.data.claim_id },
+    });
+    expect(approve.status).toBe(200);
+  });
+
+  it('approves a claim on a comped listing without requiring payment', async () => {
+    const adminSalt = 'bb'.repeat(16);
+    await env.DB.prepare('INSERT INTO businesses (slug, name, pin_hash, salt) VALUES (?,?,?,?)')
+      .bind('titusville-square', 'titusville-square', hashPin('0777', adminSalt), adminSalt).run();
+    await seedBusiness(env, 'panel-comped', '4048');
+    await env.DB.prepare("UPDATE businesses SET subscription_status='comped' WHERE slug=?").bind('panel-comped').run();
+    const start = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-comped', name: 'Library', email: 'library@example.com', role: 'Owner' },
+    });
+    await call(worker, env, 'POST', '/api/public/claim-verify', {
+      body: { claim_id: start.data.claim_id, code: start.data.dev_code },
+    });
+    await env.DB.prepare("UPDATE listing_claims SET status='pending_review' WHERE id=?").bind(start.data.claim_id).run();
+    const approve = await call(worker, env, 'POST', '/api/square/claims', {
+      body: { pin: '0777', action: 'approve', id: start.data.claim_id },
+    });
+    expect(approve.status).toBe(200);
+  });
+
 });

@@ -748,6 +748,23 @@ async function api(request, env, url) {
       if (!claim) return json({ error: 'not_found' }, 404);
       if (claim.status !== 'pending_review') return json({ error: 'not_pending_review' }, 409);
 
+      // Defence in depth. `pending_review` is only reachable through claim-pay today, so this
+      // is a second lock on the same door — but it guards money, and one lock is one bug away
+      // from being none. Check the business's own subscription independently.
+      //
+      // `grandfathered` deliberately does NOT qualify. It was a migration courtesy for the ~225
+      // listings that already existed, not a free pass for a new owner taking one over: without
+      // this, claiming any pre-existing listing would inherit paid features permanently, free.
+      const bizSub = await env.DB.prepare('SELECT subscription_status FROM businesses WHERE id=?')
+        .bind(claim.business_id).first();
+      const paidUp = bizSub && (bizSub.subscription_status === 'active' || bizSub.subscription_status === 'comped');
+      if (!paidUp) {
+        return json({
+          error: 'subscription_required',
+          subscription_status: bizSub ? bizSub.subscription_status : null,
+        }, 402);
+      }
+
       const accept_code = randomBytes(16).toString('hex');
       const expires_at = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
       await env.DB.prepare(
