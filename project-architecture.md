@@ -219,7 +219,8 @@ auto-populates the town directory → free local discovery/foot traffic.
 - Secrets via `wrangler pages secret put NAME --project-name townsquare`.
   Currently set: `SESSION_SECRET`, `HERALD_SECRET`, `DRAWBRIDGE_SECRET`,
   `BELLTOWER_SECRET`, `HEARTH_SECRET`, `MAILER_SECRET`, `PAYPAL_SECRET`,
-  `AUDIT_IP_SALT`.
+  `AUDIT_IP_SALT`, `RESEND_API_KEY`, `EMAIL_DOMAIN` (2026-07-18, listing-claim
+  OTP/approval emails — see `sendEmail()` in `_worker.js`; no-ops cleanly if unset).
 - Local: `npm run dev:full` (= `wrangler pages dev dist --local --port 3010`);
   `.dev.vars` (gitignored). Build before running it, or you serve a stale `dist/`.
 - Cloudflare account id `4990efc04eeb0c6e3f44ccc7f96a03dc`.
@@ -240,6 +241,7 @@ list IS the record of what prod has. All are applied to the remote `townsquare` 
 | `migrate-events-owner-fields.sql` | owner-facing event columns | ✅ |
 | `migrate-activity-index.sql` | activity_log index | ✅ |
 | `migrate-audit-log.sql` | `audit_log` + 3 indexes | ✅ 2026-07-18 |
+| `migrate-claims.sql` | `listing_claims`, `claim_otp_codes`, `businesses.claim_status`/`.claimed_at` | ✅ 2026-07-18 |
 
 Every migration must be **additive** (`CREATE ... IF NOT EXISTS` / `ALTER TABLE
 ADD COLUMN`). Never `DROP` or overwrite an existing table. Run `--local` first,
