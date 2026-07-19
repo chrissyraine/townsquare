@@ -140,7 +140,7 @@ export default function EventsManager({ business }) {
           No upcoming events yet. Add one to the community calendar.
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '12px' }}>
+        <div className="ts-events-grid">
           {events.map((ev) => (
             <div key={ev.id} className="glass-panel" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
