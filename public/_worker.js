@@ -519,28 +519,30 @@ async function api(request, env, url) {
       let published = null, unpublished = null;
 
       if (b.status === 'approved') {
-        if (sub.published_slug) {
-          // Published before — just make it visible again.
-          await env.DB.prepare('UPDATE businesses SET is_public=1 WHERE slug=?').bind(sub.published_slug).run();
-          published = sub.published_slug;
-        } else {
+        let slug = sub.published_slug;
+        if (!slug) {
+          // Same name already in the registry (e.g. an existing panel)? adopt it, don't duplicate.
           const existing = await env.DB.prepare('SELECT slug FROM businesses WHERE town=? AND name=?').bind(town, sub.name).first();
           if (existing) {
-            // Same name already in the registry (e.g. an existing panel) — adopt it, don't duplicate.
-            await env.DB.prepare('UPDATE businesses SET is_public=1 WHERE slug=?').bind(existing.slug).run();
-            published = existing.slug;
+            slug = existing.slug;
           } else {
             // New free listing lands as an unclaimed panel (modules {}) with a "Claim this listing" CTA.
-            const slug = await uniqueSlug(env, slugify(sub.name));
+            slug = await uniqueSlug(env, slugify(sub.name));
             const salt = randomBytes(16).toString('hex');
             const pin_hash = hashPin('4048', salt); // documented placeholder PIN for not-yet-claimed listings
             await env.DB.prepare(
-              "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,category,blurb,address,phone,website,is_public) VALUES (?,?,?,?,?,'{}',?,?,?,?,?,1)"
-            ).bind(slug, sub.name, town, pin_hash, salt, sub.category, sub.description, sub.address, sub.phone, sub.website).run();
-            published = slug;
+              "INSERT INTO businesses (slug,name,town,pin_hash,salt,modules,is_public) VALUES (?,?,?,?,?,'{}',1)"
+            ).bind(slug, sub.name, town, pin_hash, salt).run();
           }
-          await env.DB.prepare('UPDATE listing_submissions SET published_slug=? WHERE id=?').bind(published, b.id).run();
+          await env.DB.prepare('UPDATE listing_submissions SET published_slug=? WHERE id=?').bind(slug, b.id).run();
         }
+        // ALWAYS publish + apply what they actually submitted (re-approving re-applies edits).
+        // COALESCE so a blank submitted field never wipes good existing data. Auth/modules untouched.
+        await env.DB.prepare(
+          'UPDATE businesses SET is_public=1, category=COALESCE(?,category), blurb=COALESCE(?,blurb),' +
+          ' address=COALESCE(?,address), phone=COALESCE(?,phone), website=COALESCE(?,website) WHERE slug=?'
+        ).bind(sub.category, sub.description, sub.address, sub.phone, sub.website, slug).run();
+        published = slug;
       } else if (sub.published_slug) {
         // rejected / reset-to-pending: hide only the row we published.
         await env.DB.prepare('UPDATE businesses SET is_public=0 WHERE slug=?').bind(sub.published_slug).run();
