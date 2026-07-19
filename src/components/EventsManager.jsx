@@ -123,7 +123,7 @@ export default function EventsManager({ business }) {
   }
 
   return (
-    <div className="animate-fade-in" style={{ maxWidth: '820px' }}>
+    <div className="animate-fade-in" style={{ maxWidth: '1180px' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <div className="eyebrow">My Business</div>
@@ -140,9 +140,9 @@ export default function EventsManager({ business }) {
           No upcoming events yet. Add one to the community calendar.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '12px' }}>
           {events.map((ev) => (
-            <div key={ev.id} className="glass-panel" style={{ padding: '18px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            <div key={ev.id} className="glass-panel" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
                 <div style={{ fontSize: '0.95rem', color: 'var(--text-soft)' }}>
                   {ev.title}{' '}
