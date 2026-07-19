@@ -275,10 +275,21 @@ async function api(request, env, url) {
       await audit(env, request, { actor: 'system', action: 'business.provision', entity_type: 'drawbridge.restaurants', entity_id: slug, summary: `provisioned Drawbridge account for ${slug}` });
     } catch (e) { warn.push('drawbridge:' + String(e)); }
 
-    // A paying signup previously notified nobody — Chrissy only saw PayPal's receipt, and
-    // the owner saw their Business ID once on the success screen. Send her the record so
-    // there's always a way to tell an owner their login. (Cloudflare Email Workers can only
-    // send to verified destinations, so we can't email the owner directly.)
+    // Welcome the paying owner with their Business ID. Previously they saw it once on the
+    // success screen with no backup — close the tab and the login was gone. Never include
+    // the PIN: they chose it, and emailing a credential is a bad habit to start.
+    await sendEmail(env, email, `You're on the Square — welcome, ${name}`,
+      `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.6;color:#241C12">
+         <p>Welcome to Titusville Square, and thank you — you&rsquo;re a Founding Business.</p>
+         <p><strong>Your Business ID is <code>${escHtml(slug)}</code></strong>. Keep this email; it&rsquo;s how you sign in.</p>
+         <p>To post your specials, announcements and hours, sign in at
+            <a href="https://titusvillesquare.com/manage">titusvillesquare.com/manage</a> using
+            <strong>${escHtml(slug)}</strong> (or this email address) plus the PIN you chose at signup.</p>
+         <p>Forgot the PIN? Just reply to this email and I&rsquo;ll sort it out.</p>
+         <p>— Chrissy, Forever Still Studio</p>
+       </div>`, 'hello');
+
+    // Also send Chrissy the record, so an owner's login can always be recovered.
     await notify(env, `New Founding 50 signup: ${name}`,
       `${name}${category ? ' (' + category + ')' : ''}\n\n` +
       `Business ID (their login): ${slug}\n` +
@@ -560,6 +571,20 @@ async function api(request, env, url) {
           ' address=COALESCE(?,address), phone=COALESCE(?,phone), website=COALESCE(?,website) WHERE slug=?'
         ).bind(sub.category, sub.description, sub.address, sub.phone, sub.website, slug).run();
         published = slug;
+        // The listing form promises "we'll email you when you're live" — keep it.
+        // Only on the first publish, so re-approving an edit doesn't re-spam them.
+        if (!sub.notified_live_at && sub.email) {
+          const r = await sendEmail(env, sub.email, `${sub.name} is live on Titusville Square`,
+            `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.6;color:#241C12">
+               <p>Good news — <strong>${escHtml(sub.name)}</strong> is now listed on Titusville Square.</p>
+               <p><a href="https://titusvillesquare.com/?q=${encodeURIComponent(sub.name)}">See your listing &rarr;</a></p>
+               <p>It&rsquo;s free and it stays free. If anything looks wrong, or you&rsquo;d like it taken down,
+                  you can fix or remove it anytime at
+                  <a href="https://titusvillesquare.com/my-listing">titusvillesquare.com/my-listing</a> — no questions asked.</p>
+               <p>Thanks for being part of the Square.<br>— Chrissy, Forever Still Studio</p>
+             </div>`, 'hello');
+          if (r.sent) await env.DB.prepare("UPDATE listing_submissions SET notified_live_at=datetime('now') WHERE id=?").bind(b.id).run();
+        }
       } else if (sub.published_slug) {
         // rejected / reset-to-pending: hide only the row we published.
         await env.DB.prepare('UPDATE businesses SET is_public=0 WHERE slug=?').bind(sub.published_slug).run();
@@ -1576,14 +1601,24 @@ async function notify(env, subject, body) {
 // email — this mirrors that exact pattern. No-ops cleanly (never throws, never blocks
 // the caller) if RESEND_API_KEY isn't set, matching notify()'s degrade convention:
 // the claim row is still saved and visible to an admin even if the email never sends.
-async function sendEmail(env, to, subject, html) {
+// Business names/descriptions are user-submitted and get interpolated into HTML email,
+// so escape them: an unescaped "&" or "<" breaks rendering at best, injects at worst.
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// `fromUser` is optional and defaults to 'claims' so every existing caller is unchanged;
+// listing/signup mail uses 'hello' since "claims@" reads oddly on a welcome message.
+async function sendEmail(env, to, subject, html, fromUser) {
   if (!env.RESEND_API_KEY || !to) return { sent: false, skipped: true };
   const domain = env.EMAIL_DOMAIN || 'foreverstillstudio.com';
   try {
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: `TownSquare <claims@${domain}>`, to: [to], subject, html }),
+      body: JSON.stringify({ from: `TownSquare <${fromUser || 'claims'}@${domain}>`, to: [to], subject, html }),
     });
     return { sent: r.ok, status: r.status };
   } catch (e) { return { sent: false, error: String(e) }; }
