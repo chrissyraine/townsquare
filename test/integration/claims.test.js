@@ -348,4 +348,63 @@ describe('listing claim flow', () => {
     expect(approve.status).toBe(200);
   });
 
+
+  // A claim stuck at the payment step must not lock the listing forever. A DIFFERENT person
+  // can take it over only after it has sat unpaid for over a week; before that it's protected.
+  it('a fresh unpaid claim still blocks a different email', async () => {
+    await seedBusiness(env, 'panel-stuck', '4048');
+    const first = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-stuck', name: 'First', email: 'first@example.com', role: 'Owner' },
+    });
+    await call(worker, env, 'POST', '/api/public/claim-verify', {
+      body: { claim_id: first.data.claim_id, code: first.data.dev_code },
+    }); // now payment_required, created just now
+    const other = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-stuck', name: 'Other', email: 'other@example.com', role: 'Owner' },
+    });
+    expect(other.status).toBe(409);
+    expect(other.data.error).toBe('claim_in_progress');
+  });
+
+  it('the SAME person returns straight to payment, no new code', async () => {
+    await seedBusiness(env, 'panel-return', '4048');
+    const first = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-return', name: 'Owner', email: 'owner@example.com', role: 'Owner' },
+    });
+    await call(worker, env, 'POST', '/api/public/claim-verify', {
+      body: { claim_id: first.data.claim_id, code: first.data.dev_code },
+    });
+    const again = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-return', name: 'Owner', email: 'OWNER@example.com', role: 'Owner' },
+    });
+    expect(again.status).toBe(200);
+    expect(again.data.status).toBe('payment_required'); // routed to pay, not verification
+    expect(again.data.claim_id).toBe(first.data.claim_id); // same row, no duplicate
+    expect(again.data.dev_code).toBeUndefined();           // no code re-issued
+  });
+
+  it('after a week unpaid, a different person can take the claim over', async () => {
+    await seedBusiness(env, 'panel-release', '4048');
+    const first = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-release', name: 'First', email: 'first@example.com', role: 'Owner' },
+    });
+    await call(worker, env, 'POST', '/api/public/claim-verify', {
+      body: { claim_id: first.data.claim_id, code: first.data.dev_code },
+    });
+    // Age the stuck claim 8 days.
+    await env.DB.prepare("UPDATE listing_claims SET created_at=datetime('now','-8 days') WHERE id=?")
+      .bind(first.data.claim_id).run();
+
+    const taker = await call(worker, env, 'POST', '/api/public/claim-start', {
+      body: { business_slug: 'panel-release', name: 'Taker', email: 'taker@example.com', role: 'Owner' },
+    });
+    expect(taker.status).toBe(200);          // no longer blocked
+    // The takeover reuses the row and clears the stale verification, so the taker must
+    // verify their OWN email — the old owner's verified stamp can't carry over.
+    const row = await env.DB.prepare('SELECT claimant_email, email_verified_at, status FROM listing_claims WHERE id=?')
+      .bind(first.data.claim_id).first();
+    expect(row.claimant_email).toBe('taker@example.com');
+    expect(row.email_verified_at).toBeFalsy();
+  });
+
 });

@@ -412,7 +412,8 @@ async function api(request, env, url) {
     if (!biz) return json({ error: 'business_not_found' }, 404);
     if (biz.claim_status === 'claimed') return json({ error: 'already_claimed' }, 409);
 
-    const ABANDON_MS = 24 * 3600 * 1000;
+    const ABANDON_MS = 24 * 3600 * 1000;              // never got past email verification
+    const PAYMENT_ABANDON_MS = 7 * 24 * 3600 * 1000;  // verified, then sat unpaid at the pay step
     const active = await env.DB.prepare(
       `SELECT id, claimant_email, status, created_at FROM listing_claims
        WHERE business_id=? AND status IN ('started','verification_required','payment_required','pending_review','approved')
@@ -422,19 +423,35 @@ async function api(request, env, url) {
     let claimId;
     if (active) {
       const sameEmail = active.claimant_email.toLowerCase() === email.toLowerCase();
-      const stillOpen = active.status === 'started' || active.status === 'verification_required';
-      const abandoned = stillOpen && (Date.now() - new Date(active.created_at).getTime()) > ABANDON_MS;
+      const preVerify = active.status === 'started' || active.status === 'verification_required';
+      const awaitingPay = active.status === 'payment_required';
+      const age = Date.now() - new Date(active.created_at).getTime();
+      // "Abandoned" = a DIFFERENT person may take over the claim. Two windows: a claim that
+      // never cleared email verification within 24h, or one that verified but has sat unpaid
+      // at the payment step for over a week. Without the second window, a claim stuck at
+      // payment locks the listing forever for everyone else (this stranded a real owner who
+      // had simply mistyped their email on a second attempt). pending_review / approved are
+      // NEVER auto-released — those are legitimately with the admin or the new owner.
+      const abandoned = (preVerify && age > ABANDON_MS) || (awaitingPay && age > PAYMENT_ABANDON_MS);
 
       if (!sameEmail && !abandoned) {
         return json({ error: 'claim_in_progress' }, 409);
       }
-      if (sameEmail && !stillOpen && !abandoned) {
-        // Already verified/reviewed under this same email — nothing to (re)send.
+      // Same person returning to their own already-verified, unpaid claim: hand them straight
+      // back to the payment step — no new code, no re-verification.
+      if (sameEmail && awaitingPay) {
+        return json({ ok: true, claim_id: active.id, status: 'payment_required' });
+      }
+      // Same person on a claim already in review / approved: nothing to (re)send.
+      if (sameEmail && !preVerify) {
         return json({ ok: true, claim_id: active.id, status: active.status });
       }
+      // Otherwise: same person still pre-verification, OR a new person taking over an
+      // abandoned claim. Reuse the row and (below) issue a fresh code. Clear the old
+      // verification stamp so a taken-over claim can never read as already-verified.
       claimId = active.id;
       await env.DB.prepare(
-        "UPDATE listing_claims SET claimant_name=?, claimant_email=?, claimant_phone=?, claimant_role=?, message=?, status='started' WHERE id=?"
+        "UPDATE listing_claims SET claimant_name=?, claimant_email=?, claimant_phone=?, claimant_role=?, message=?, status='started', email_verified_at=NULL WHERE id=?"
       ).bind(name, email, phone, role, message, claimId).run();
     } else {
       const ins = await env.DB.prepare(
