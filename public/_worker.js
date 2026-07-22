@@ -41,6 +41,41 @@ const EVENT_CAP = 500;
 // paired *secret* is set as a Worker secret (PAYPAL_SECRET); env can override this id.
 const PAYPAL_LIVE_CLIENT_ID = 'Ab48DLR-FRpiFhHrgbRZUv8JxyhQ1u9jl_aPrBC4Yd6AkYu-Z4ck8I6iiRd-miZFCyFUq3TSPcs0D6EJ';
 
+// Directory taxonomy — slugs-only mirror of titusvillesquare/public/taxonomy.js,
+// used purely to VALIDATE what owners/admins write. Display titles, icons and
+// descriptions live client-side in taxonomy.js; keep the two slug sets in sync.
+const TAXONOMY = {
+  'eat-drink': ['restaurants', 'cafes-coffee', 'bakeries-desserts', 'bars-nightlife', 'takeout-fast-food', 'catering', 'specialty-food'],
+  'stay': ['hotels', 'inns-bnb', 'vacation-rentals', 'campgrounds', 'extended-stay'],
+  'shop': ['clothing-accessories', 'gifts-specialty', 'antiques-vintage', 'home-garden', 'grocery-markets', 'books-art-hobbies', 'hardware-supplies', 'florists'],
+  'things-to-do': ['attractions', 'arts-culture', 'recreation-outdoors', 'entertainment', 'family-activities', 'museums-history', 'tours-experiences'],
+  'beauty-wellness': ['hair-beauty', 'spas-massage', 'fitness', 'medical-dental', 'counseling-wellness', 'pharmacies'],
+  'home-auto': ['contractors-repair', 'cleaning-property', 'landscaping', 'real-estate', 'automotive', 'plumbing-heating-electrical', 'furniture-appliances'],
+  'local-services': ['legal-financial', 'insurance', 'marketing-technology', 'photography-creative', 'printing-signs', 'pet-services', 'personal-business'],
+  'community': ['nonprofits', 'churches-faith', 'schools-childcare', 'libraries', 'government-public', 'clubs-civic', 'senior-veteran'],
+  'events-venues': ['event-venues', 'wedding-services', 'party-rentals', 'live-entertainment', 'event-planning'],
+};
+// Family Friendly / Pet Friendly / Appointment Required live in dedicated columns,
+// so they are deliberately absent here — the tags column never duplicates them.
+const TAXONOMY_TAGS = new Set([
+  'Kid Friendly', 'Veteran Owned', 'Woman Owned', 'Locally Made', 'Outdoor Seating',
+  'Accessible', 'Delivery', 'Takeout', 'Open Late', 'Free Admission',
+]);
+// Returns {primary, subcategory, tags} normalized, or {error} if invalid.
+function validateTaxonomy(primary, subcategory, tags) {
+  const p = primary == null || primary === '' ? null : String(primary);
+  if (p !== null && !TAXONOMY[p]) return { error: 'invalid_primary_category' };
+  let s = subcategory == null || subcategory === '' ? null : String(subcategory);
+  // A subcategory only means something inside its primary; without one it's noise.
+  if (s !== null && (p === null || !TAXONOMY[p].includes(s))) return { error: 'invalid_subcategory' };
+  let t = null;
+  if (tags !== undefined && tags !== null) {
+    if (!Array.isArray(tags)) return { error: 'invalid_tags' };
+    t = [...new Set(tags.map(String))].filter((x) => TAXONOMY_TAGS.has(x)).slice(0, 10);
+  }
+  return { primary: p, subcategory: s, tags: t };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -188,7 +223,7 @@ async function api(request, env, url) {
   if (path === '/api/public/directory' && method === 'GET') {
     const town = url.searchParams.get('town') || 'titusville';
     const rows = await env.DB.prepare(
-      'SELECT slug,name,category,blurb,address,phone,website,logo,primary_color,forge_url,modules,subscription_status FROM businesses WHERE town=? AND is_public=1 ORDER BY name'
+      'SELECT slug,name,category,blurb,address,phone,website,logo,primary_color,forge_url,modules,subscription_status,primary_category,subcategory,tags FROM businesses WHERE town=? AND is_public=1 ORDER BY name'
     ).bind(town).all();
     // The basic listing always publishes; only the paid `modules` map is withheld while
     // inactive, so a lapsed business stays fully findable in the directory.
@@ -196,6 +231,7 @@ async function api(request, env, url) {
       town,
       businesses: (rows.results || []).map(({ subscription_status, ...b }) => ({
         ...b,
+        tags: parse(b.tags, []),
         modules: subscriptionActive({ subscription_status }) ? parse(b.modules, {}) : {},
       })),
     });
@@ -667,6 +703,32 @@ async function api(request, env, url) {
       ).all();
       return json({ submissions: subs.results || [], requests: reqs.results || [] });
     }
+    // ---- directory taxonomy admin ----
+    // The migration backfill only fills what it can defend; everything else lands
+    // here. `category-review` = the queue of unclassified public listings;
+    // `set-category` = the manual override (also how review-flagged calls get fixed).
+    if (act === 'category-review') {
+      const rows = await env.DB.prepare(
+        `SELECT slug, name, category, primary_category, subcategory FROM businesses
+         WHERE is_public=1 AND primary_category IS NULL ORDER BY name LIMIT 300`
+      ).all();
+      return json({ unclassified: rows.results || [] });
+    }
+    if (act === 'set-category' && b.slug) {
+      const biz = await env.DB.prepare('SELECT id, name FROM businesses WHERE slug=?').bind(b.slug).first();
+      if (!biz) return json({ error: 'not_found' }, 404);
+      const v = validateTaxonomy(b.primary_category, b.subcategory, b.tags);
+      if (v.error) return json({ error: v.error }, 400);
+      await env.DB.prepare(
+        'UPDATE businesses SET primary_category=?, subcategory=?' + (v.tags !== null ? ', tags=?' : '') + ' WHERE id=?'
+      ).bind(...(v.tags !== null ? [v.primary, v.subcategory, JSON.stringify(v.tags), biz.id] : [v.primary, v.subcategory, biz.id])).run();
+      await audit(env, request, {
+        actor: 'admin', action: 'business.set_category', entity_type: 'businesses', entity_id: biz.id,
+        summary: `admin classified "${biz.name}" as ${v.primary || '(none)'}${v.subcategory ? ' › ' + v.subcategory : ''}`,
+      });
+      return json({ ok: true });
+    }
+
     // Approving must actually PUBLISH the listing into the `businesses` registry — that
     // registry (not this queue) is what the public directory reads. Un-approving pulls
     // back out only the exact row we published, tracked via published_slug.
@@ -882,6 +944,7 @@ async function api(request, env, url) {
     const rows = await env.DB.prepare(
       `SELECT slug,name,category,blurb,website,logo,primary_color,forge_url,product_slugs,modules,
               subscription_status,
+              primary_category,subcategory,tags,
               full_description,secondary_categories,address,service_area,phone,email,
               public_contact_preference,social_links,price_range,accessibility_info,parking_info,
               family_friendly,pet_friendly,appointment_required,service_notes
@@ -1049,7 +1112,7 @@ async function api(request, env, url) {
     const ctx = await requireRole(request, env, 'STAFF');
     if (!ctx) return json({ error: 'forbidden' }, 403);
     const biz = await env.DB.prepare(
-      `SELECT slug, name, town, category, blurb, full_description, secondary_categories, address,
+      `SELECT slug, name, town, category, blurb, primary_category, subcategory, tags, full_description, secondary_categories, address,
               service_area, phone, email, website, public_contact_preference, social_links,
               price_range, accessibility_info, parking_info, family_friendly, pet_friendly,
               appointment_required, service_notes, logo, primary_color, is_public
@@ -1060,6 +1123,7 @@ async function api(request, env, url) {
       ...biz,
       secondary_categories: parse(biz.secondary_categories, []),
       social_links: parse(biz.social_links, {}),
+      tags: parse(biz.tags, []),
     });
   }
 
@@ -1094,6 +1158,26 @@ async function api(request, env, url) {
       const sl = b.social_links && typeof b.social_links === 'object' ? b.social_links : {};
       sets.push('social_links=?');
       vals.push(JSON.stringify({ facebook: sl.facebook || null, instagram: sl.instagram || null, other: sl.other || null }));
+    }
+    // Directory taxonomy: validated as a UNIT, merged with current values first —
+    // a subcategory arriving without its primary must be checked against the primary
+    // the business already has, and clearing the primary must clear the sub with it.
+    const hasTax = ['primary_category', 'subcategory', 'tags'].some((k) => Object.prototype.hasOwnProperty.call(b, k));
+    if (hasTax) {
+      const cur = await env.DB.prepare('SELECT primary_category, subcategory, tags FROM businesses WHERE id=?')
+        .bind(ctx.businessId).first();
+      const merged = validateTaxonomy(
+        Object.prototype.hasOwnProperty.call(b, 'primary_category') ? b.primary_category : cur.primary_category,
+        Object.prototype.hasOwnProperty.call(b, 'subcategory') ? b.subcategory
+          // changing primary without naming a sub drops the old sub rather than
+          // carrying a sub that belongs to a different category
+          : (Object.prototype.hasOwnProperty.call(b, 'primary_category') ? null : cur.subcategory),
+        Object.prototype.hasOwnProperty.call(b, 'tags') ? b.tags : undefined
+      );
+      if (merged.error) return json({ error: merged.error }, 400);
+      sets.push('primary_category=?', 'subcategory=?');
+      vals.push(merged.primary, merged.subcategory);
+      if (merged.tags !== null) { sets.push('tags=?'); vals.push(JSON.stringify(merged.tags)); }
     }
     if (!sets.length) return json({ error: 'no_fields' }, 400);
     vals.push(ctx.businessId);
@@ -1324,6 +1408,7 @@ async function api(request, env, url) {
     const b = await env.DB.prepare(
       `SELECT slug,name,category,blurb,website,logo,primary_color,forge_url,product_slugs,modules,is_public,
               subscription_status,
+              primary_category,subcategory,tags,
               full_description,secondary_categories,address,service_area,phone,email,
               public_contact_preference,social_links,price_range,accessibility_info,parking_info,
               family_friendly,pet_friendly,appointment_required,service_notes
@@ -1573,6 +1658,11 @@ async function buildPublicProjection(b) {
     pet_friendly: b.pet_friendly === null || b.pet_friendly === undefined ? null : !!b.pet_friendly,
     appointment_required: b.appointment_required === null || b.appointment_required === undefined ? null : !!b.appointment_required,
     service_notes: b.service_notes || null,
+    // Directory classification is BASIC listing data — like name and address it
+    // publishes regardless of subscription state (only paid `modules` are gated).
+    primary_category: b.primary_category || null,
+    subcategory: b.subcategory || null,
+    tags: parse(b.tags, []),
     links: {
       website: b.website || null,
       menu: modules.drawbridge ? `${PRODUCTS.drawbridge.origin}/menu/${pslugs.drawbridge || b.slug}` : null,
