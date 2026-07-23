@@ -1582,7 +1582,13 @@ async function buildPublicProjection(b) {
       const r = await fetch(`${PRODUCTS.drawbridge.origin}/api/menu/${pslugs.drawbridge || b.slug}`, { cf: { cacheTtl: 120 } });
       if (r.ok) {
         const m = await r.json();
-        live.open_now = m.open_now;
+        // Drawbridge's `restaurants.is_open` defaults to 1 at signup and its own
+        // `open_now` is computed FROM that switch + `hours`. A business that never
+        // touched either still reports {open_now:true, hours:null} — the untouched
+        // default, not a real "we are open" signal. Only trust open_now once real
+        // hours back it up; otherwise it falls through to Herald's hours (or stays
+        // unknown), same as any other business with no posted schedule.
+        if (m.hours) live.open_now = m.open_now;
         live.specials = (m.specials || []).map((s) => ({ name: s.name, price: s.price })).slice(0, 6);
       }
     } catch { /* skip signal */ }
