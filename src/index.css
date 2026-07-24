@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=Montserrat:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=Montserrat:wght@300;400;500;600&family=Cinzel:wght@400;500;600&family=Jost:wght@300;400;500;600&display=swap');
 
 :root {
   /* Forever Still Brand Palette */
@@ -288,3 +288,48 @@ h1, h2, h3, h4, h5, h6 {
   .ts-events-grid { grid-template-columns: 1fr; }
   .ts-dash-grid { grid-template-columns: 1fr; }
 }
+
+/* ============================================================================
+   HOUSEBOOKER SKIN  (appended override — wins by cascade order)
+   Brings the TownSquare owner LOGIN + HUB into the Forever Still house look:
+   warm ivory workspace + the signature dark gilt sidebar, Cinzel / Jost. Keeps
+   TownSquare's gold accent. SCOPED to .login-wrapper + .app-container so the
+   public Landing marketing page is left untouched (like the Drawbridge menus).
+   Source of truth: C:\foreverstill\housebooker-ui\
+   ============================================================================ */
+.login-wrapper, .app-container{
+  --bg-base:#f2ead6; --bg-surface:#faf4e5; --bg-elevated:#fffdf8;
+  --text-main:#26221c; --text-soft:#3a342b; --text-muted:#6b6152;
+  --accent-primary:#C8A96A; --accent-secondary:#9a6a52; --accent-deep:#96793b; --accent-dim:#b1904d;
+  --border-light:#ddd0b1; --danger:#9a4432; --success:#3c6136;
+  --shadow-sm:0 1px 2px rgba(33,29,24,.06);
+  --shadow-md:0 1px 2px rgba(33,29,24,.06),0 8px 26px rgba(33,29,24,.08);
+  --shadow-glow:0 0 0 3px rgba(200,169,106,.18);
+  background-color:var(--bg-base); color:var(--text-main);
+  font-family:'Jost',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+.login-wrapper h1,.login-wrapper h2,.login-wrapper h3,
+.app-container h1,.app-container h2,.app-container h3,.app-container h4,
+.ts-brand__name,.ts-main__head h2{ font-family:'Cinzel',Georgia,serif; font-weight:600; letter-spacing:.02em; }
+.login-wrapper .btn,.app-container .btn,
+.eyebrow,.input-label,.ts-navitem,.ts-logout,.ts-brand__sub,.ts-biz{ font-family:'Jost',system-ui,sans-serif; }
+
+/* primary button: gold with dark text; hover -> charcoal with cream text */
+.login-wrapper .btn-primary,.app-container .btn-primary{ background:var(--accent-primary); color:#26221c; border-color:var(--accent-primary); }
+.login-wrapper .btn-primary:hover,.app-container .btn-primary:hover{ background:#211d18; color:#faf4e5; border-color:#211d18; box-shadow:var(--shadow-md); }
+
+/* login card -> warm gilt gate */
+.login-card{ border:1px solid var(--border-light); border-radius:6px; position:relative;
+  box-shadow:0 16px 44px rgba(33,29,24,.14); }
+
+/* THE SIGNATURE: dark gilt sidebar against the warm main column */
+.ts-side{ background:#2e2922; border-right-color:rgba(244,239,228,.10); }
+.ts-brand__name{ color:#faf4e5; }
+.ts-biz{ border-top-color:rgba(244,239,228,.12); color:rgba(244,239,228,.55); }
+.ts-biz b{ color:#faf4e5; }
+.ts-navitem{ color:rgba(244,239,228,.78); }
+.ts-navitem:hover{ background:rgba(244,239,228,.07); color:#fff; }
+.ts-navitem.active{ background:rgba(200,169,106,.20); color:#e8d9b0; border-left-color:#C8A96A; }
+.ts-navitem:not(.active) .ts-navitem__ico{ filter:grayscale(.55) brightness(1.8); }
+.ts-logout{ color:rgba(244,239,228,.6); border-color:rgba(244,239,228,.2); }
+.ts-logout:hover{ color:#e8d9b0; border-color:#C8A96A; }
